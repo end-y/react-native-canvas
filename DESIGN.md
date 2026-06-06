@@ -321,7 +321,9 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 
 ## 11. Geliştirme sıralaması (öneri)
 
-> **Durum (güncel):** ✅ Adım 0 tamam — proje iskeleti kuruldu (RN Fabric view, New Arch) ve **baseline her iki platformda doğrulandı** (yeşil kutu Android + iOS'ta render oldu). Sıradaki: Adım 1 (Skia).
+> **Durum (güncel):** ✅ Adım 0-2 + Yol A + Yol B **tamamlandı.** İskelet kuruldu, baseline doğrulandı, ve **kendi derlediğimiz Skia (m148, CPU raster)** iOS + Android'de çiziyor (`third_party/skia` + `scripts/build-skia.sh`). Şu an `<CanvasView>` C++ içinde **sabit** bir daire+kare çiziyor — JS'e açılmış `ctx` yok.
+>
+> **SIRADAKI (asıl canvas işi):** Adım 3 → `ctx` JSI HostObject + gerçek imperatif API. Yani sabit çizimi, JS'ten `ctx.fillRect()/arc()/path...` çağrılabilen gerçek `<Canvas>` ile değiştirmek. Devamı: `useCanvasFramer` (vsync rAF loop), `useEntity`, `onPress`. Varoluşsal risk bitti; buradan itibarı düz mühendislik.
 
 0. ✅ **İskelet + baseline:** `create-react-native-library` (fabric-view, kotlin-objc) ile `<CanvasView>` kuruldu; Android (Pixel 4 / API 34) ve iOS (iPhone 16 / iOS 26.5) üzerinde çalışan boş view doğrulandı.
 1. **Skia binary'lerini linkle** (Android + iOS) — ilk ve en kritik engel.
