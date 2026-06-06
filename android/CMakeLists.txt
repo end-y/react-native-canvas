@@ -4,12 +4,12 @@ project(canvas)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SKIA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/skia)
+set(SKIA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/skia)
 
-# Prebuilt Skia static lib (Yol A bootstrap: rust-skia m148), per-ABI.
+# Our own Skia static lib (built from m148, minimal CPU-only), per-ABI.
 add_library(skia STATIC IMPORTED)
 set_target_properties(skia PROPERTIES
-  IMPORTED_LOCATION ${SKIA_DIR}/lib/${ANDROID_ABI}/libskia.a)
+  IMPORTED_LOCATION ${SKIA_DIR}/libs/android/${ANDROID_ABI}/libskia.a)
 
 add_library(canvas SHARED src/main/cpp/canvas_jni.cpp)
 

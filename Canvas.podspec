@@ -24,20 +24,21 @@ Pod::Spec.new do |s|
 
   s.pod_target_xcconfig = {
     # Skia headers use root-relative includes: #include "include/core/SkCanvas.h"
-    "HEADER_SEARCH_PATHS" => "\"$(PODS_TARGET_SRCROOT)/ios/third_party/skia\"",
+    "HEADER_SEARCH_PATHS" => "\"$(PODS_TARGET_SRCROOT)/third_party/skia\"",
     "CLANG_CXX_LANGUAGE_STANDARD" => "c++20",
-    # The prebuilt lib is an optimized (is_official_build) build => SK_RELEASE.
-    # In a Debug pod NDEBUG is undefined, so without this Skia headers would assume
-    # SK_DEBUG and mismatch the lib's ABI. Force release to match.
+    # Our Skia is built with is_official_build => SK_RELEASE. In a Debug pod NDEBUG
+    # is undefined, so without this Skia headers would assume SK_DEBUG and mismatch
+    # the lib's ABI. Force release to match.
     "GCC_PREPROCESSOR_DEFINITIONS" => "$(inherited) SK_RELEASE=1",
   }
 
-  # vendored_libraries does not reliably propagate -lskia to the app link line under
-  # the RN New Arch / prebuilt setup. Link the static lib into the *app* target
-  # explicitly by full path. PODS_ROOT = example/ios/Pods => repo root is ../../../.
-  # (arm64 iOS simulator only for now; device + xcframework comes in Yol B.)
+  # vendored_libraries does not reliably propagate the static lib to the app link
+  # line under the RN New Arch / prebuilt setup, so link it into the *app* target
+  # explicitly by full path, selected per SDK (simulator vs device).
+  # PODS_ROOT = example/ios/Pods => repo root is ../../../.
   s.user_target_xcconfig = {
-    "OTHER_LDFLAGS" => "$(inherited) \"$(PODS_ROOT)/../../../ios/third_party/skia/lib/libskia.a\"",
+    "OTHER_LDFLAGS[sdk=iphonesimulator*]" => "$(inherited) \"$(PODS_ROOT)/../../../third_party/skia/libs/apple/ios-sim-arm64/libskia.a\"",
+    "OTHER_LDFLAGS[sdk=iphoneos*]" => "$(inherited) \"$(PODS_ROOT)/../../../third_party/skia/libs/apple/ios-arm64/libskia.a\"",
   }
 
   install_modules_dependencies(s)

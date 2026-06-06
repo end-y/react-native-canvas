@@ -395,6 +395,25 @@ Aynı Skia çizimi Pixel 4 / API 34 emülatöründe (arm64-v8a) render oldu. Zin
 
 **Piksel formatı (iOS'tan farkı):** Android `Bitmap.Config.ARGB_8888` bellekte **RGBA** → SkBitmap'i `kRGBA_8888_SkColorType` ile sar → **takas yok**. `SkColor` (logical ARGB) = `android.graphics.Color` int, doğrudan geçer. (iOS'ta CGImage BGRA istiyordu; burada RGBA.)
 
+### Yol B — kendi Skia binary'lerimiz DOĞRULANDI ✅
+Borçlu rust-skia binary'lerinden kurtulduk; Skia'yı **kaynaktan (chrome/m148) kendimiz derliyoruz**. Hem iOS sim hem Android emülatörde kendi lib'imizle çizim doğrulandı.
+
+**Build:** `scripts/build-skia.sh` (depot_tools'suz; `git-sync-deps` + `bin/fetch-gn`/`fetch-ninja`). Kaynak `~/skia-build/skia` (repo dışı, paketlenmez — silinebilir).
+
+**Minimal CPU-only GN args** (boyutu küçük tutar): `is_official_build=true` + kapalı: `ganesh, gl, metal, vulkan` (GPU yok), `icu, harfbuzz, skparagraph, skshaper` (text yok), `svg, expat`, tüm `libjpeg/png/webp decode/encode` (codec yok), `freetype`.
+
+**4 hedef** → `third_party/skia/libs/`:
+- `apple/ios-arm64/libskia.a` (device, 12M), `apple/ios-sim-arm64/libskia.a` (sim, 12M)
+- `android/arm64-v8a/libskia.a` (10M), `android/x86_64/libskia.a` (11M)
+
+**Paylaşılan yapı:** `third_party/skia/{include, modules/skcms, libs/<platform>/<abi>/libskia.a}`. Header'lar artık kendi kaynak ağacımızdan (lib'lerle birebir eşleşir). **Vulkan header'ları (20M) atıldı** (vulkan kapalı). Toplam ~49M.
+
+**Per-target lib seçimi:**
+- iOS (podspec `user_target_xcconfig`): `OTHER_LDFLAGS[sdk=iphonesimulator*]` → sim lib, `[sdk=iphoneos*]` → device lib.
+- Android (CMake): `libs/android/${ANDROID_ABI}/libskia.a`; `abiFilters arm64-v8a, x86_64`.
+
+**Boyut notu:** `.a` dosyaları 10-12M ama app'e linklenen kısım çok daha az (static link + dead-strip). v0.1 CPU-only olduğu için minimal. Lib strip + iOS xcframework ileride opsiyonel cila.
+
 ### Çalıştırma komutları (referans)
 ```bash
 # Bağımlılıklar

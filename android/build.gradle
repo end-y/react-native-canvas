@@ -49,8 +49,8 @@ android {
       }
     }
     ndk {
-      // Only arm64-v8a prebuilt Skia for now (Yol A bootstrap; Apple Silicon emulator).
-      abiFilters "arm64-v8a"
+      // Skia shipped for arm64-v8a (devices / Apple-Silicon emulators) and x86_64 (Intel emulators).
+      abiFilters "arm64-v8a", "x86_64"
     }
   }
 
