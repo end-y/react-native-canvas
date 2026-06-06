@@ -321,14 +321,14 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 
 ## 11. Geliştirme sıralaması (öneri)
 
-> **Durum (güncel):** ✅ Adım 0-2 + Yol A + Yol B **tamamlandı.** İskelet kuruldu, baseline doğrulandı, ve **kendi derlediğimiz Skia (m148, CPU raster)** iOS + Android'de çiziyor (`third_party/skia` + `scripts/build-skia.sh`). Şu an `<CanvasView>` C++ içinde **sabit** bir daire+kare çiziyor — JS'e açılmış `ctx` yok.
+> **Durum (güncel):** ✅ Adım 0-3 + Yol A + Yol B **tamamlandı.** İskelet kuruldu, baseline doğrulandı, **kendi derlediğimiz Skia (m148, CPU raster)** iOS + Android'de çiziyor, ve artık **`ctx` JSI HostObject gerçek imperatif API** ile çalışıyor: `<Canvas>` JS'ten `ctx.fillStyle/fillRect/arc/beginPath/moveTo/lineTo/stroke/globalAlpha...` çağrılarıyla çiziliyor. Sabit native çizim kaldırıldı; her iki platformda da **piksel-özdeş** sonuç JS'ten sürülüyor (paylaşılan `cpp/` çekirdeği). Bkz. §13 "Adım 3".
 >
-> **SIRADAKI (asıl canvas işi):** Adım 3 → `ctx` JSI HostObject + gerçek imperatif API. Yani sabit çizimi, JS'ten `ctx.fillRect()/arc()/path...` çağrılabilen gerçek `<Canvas>` ile değiştirmek. Devamı: `useCanvasFramer` (vsync rAF loop), `useEntity`, `onPress`. Varoluşsal risk bitti; buradan itibarı düz mühendislik.
+> **SIRADAKI:** Adım 4 → Frame loop. Şu an JS tek seferlik `ctx.present()` çağırıyor (köprü); sıradaki iş native vsync'i (`Choreographer`/`CADisplayLink`) bağlayıp `useCanvasFramer(ref, (ctx, params) => ...)` ile her frame otomatik flush + `dt`/`time`/`frame` + try/catch. Devamı: `useEntity`, `params` köprüsü, `onPress`. Varoluşsal risk bitti; buradan itibarı düz mühendislik.
 
 0. ✅ **İskelet + baseline:** `create-react-native-library` (fabric-view, kotlin-objc) ile `<CanvasView>` kuruldu; Android (Pixel 4 / API 34) ve iOS (iPhone 16 / iOS 26.5) üzerinde çalışan boş view doğrulandı.
 1. **Skia binary'lerini linkle** (Android + iOS) — ilk ve en kritik engel.
 2. **CPU raster ile "merhaba dünya":** tek renk dolu surface → ekrana bas. Present borusunu (GPU karmaşası olmadan) ispatla. Bir platformda birkaç gün önde gidilebilir, ama ikisi de v1'de.
-3. **`ctx` çekirdeği:** JSI HostObject + temel shape/path/transform + renk parse.
+3. ✅ **`ctx` çekirdeği:** JSI HostObject + temel shape/path/transform + renk parse. **DOĞRULANDI** (iOS + Android).
 4. **Frame loop:** native vsync bağlama, `dt`, `useCanvasFramer`, try/catch.
 5. **`useEntity` + `params` köprüsü + `onPress`.**
 6. **GL backend'e geçiş:** CPU raster yerine Ganesh/GL (JS API hiç değişmez).
@@ -415,6 +415,31 @@ Borçlu rust-skia binary'lerinden kurtulduk; Skia'yı **kaynaktan (chrome/m148) 
 - Android (CMake): `libs/android/${ANDROID_ABI}/libskia.a`; `abiFilters arm64-v8a, x86_64`.
 
 **Boyut notu:** `.a` dosyaları 10-12M ama app'e linklenen kısım çok daha az (static link + dead-strip). v0.1 CPU-only olduğu için minimal. Lib strip + iOS xcframework ileride opsiyonel cila.
+
+### Adım 3 — `ctx` JSI HostObject DOĞRULANDI ✅
+JS'ten sürülen gerçek imperatif çizim her iki platformda da render oldu (aynı `example/src/App.tsx`: mavi daire + yarı-saydam kırmızı kare + beyaz stroke üçgen → piksel-özdeş). Sabit native çizim kaldırıldı.
+
+**Paylaşılan çekirdek (`cpp/`, platform-nötr — her iki build de derliyor):**
+- `CommandList.h` — düz POD `Command` (op + geometri + snapshot'lanmış renk/lineWidth). DESIGN §7 "batch": ctx çağrıları komut listesine birikir.
+- `ColorParser.{h,cpp}` — `#rgb/#rrggbb/#rrggbbaa`, `rgb()/rgba()`, sınırlı isimli renk → ARGB. Skia'sız, host-test edildi.
+- `CanvasContext.{h,cpp}` — `jsi::HostObject`. `get()` her metoda host-function döner (komut ekler), property get/set (`fillStyle`...) state'i tutar. `globalAlpha` snapshot anında renge katlanır. `present()` → flush callback + listeyi temizle.
+- `CanvasRenderer.{h,cpp}` — komut listesi → `SkCanvas`. (Önceden .mm/.cpp'de kopya olan çizim mantığı tek yerde toplandı.)
+- `CanvasRegistry.{h,cpp}` — `tag → FlushFn` (mutex'li). PlatformSurface sınırının step-3 hâli: ctx hangi view'a bağlı bilmeden flush'ı tag ile route'lar.
+- `CanvasInstaller.{h,cpp}` — runtime'a `global.__rncanvasGetContext(tag)` kurar; dönen ctx'in flush'ı `registry.dispatch(tag, ...)`.
+
+**JS:** `Canvas` (forwardRef) → `getContext()` = `CanvasModule.install()` (idempotent) + `global.__rncanvasGetContext(findNodeHandle(ref))`. Tag bağlama, Fabric view'ın react tag'ine dayanır.
+
+**Kritik öğrenmeler:**
+1. **Skia path API göçü:** m148'de `SkPath` mutasyon metotları (`moveTo/lineTo/close/addRect/arcTo/addCircle`) **kaldırılmış**; `SkPathBuilder` kullanılıyor, çizim için `builder.snapshot()` → `SkPath`. (`SkPath` artık ~immutable, sadece `reset()`.) İlk derleme bununla patladı.
+2. **TurboModule install hook'u platforma göre:**
+   - iOS: `CanvasModule` (ObjC TM, `RCT_EXPORT_MODULE(CanvasModule)`) `RCTTurboModuleWithJSIBindings`'e uyup `installJSIBindingsWithRuntime:callInvoker:` içinde `installCanvasApi(runtime)`. TM manager modül kurulurken otomatik çağırır. `getTurboModule:` → `NativeCanvasModuleSpecJSI`.
+   - Android: `CanvasModule` (Kotlin TM, `NativeCanvasModuleSpec`) `install()` → `reactContext.javaScriptContextHolder.get()` (long = `jsi::Runtime*`) → JNI `nativeInstall(ptr)` → `installCanvasApi(*rt)`. `CanvasPackage`'a `getModule` + `ReactModuleInfo(isTurboModule=true)` eklendi.
+3. **Codegen:** `src/NativeCanvasModule.ts` (`TurboModuleRegistry.getEnforcing('CanvasModule')`); `codegenConfig type:all` modülü de üretiyor. iOS umbrella `CanvasViewSpec/CanvasViewSpec.h` → `@protocol NativeCanvasModuleSpec` + `NativeCanvasModuleSpecJSI`. Android spec `com.canvas.NativeCanvasModuleSpec`.
+4. **Tag eşleme:** iOS Fabric view `.tag`'ini mount'ta react tag'e set ediyor (`RCTComponentViewRegistry`), recycle'da 0. `-setTag:` override edip register/unregister. Android'de view `id` == react tag; `onAttachedToWindow`/`onDetached`'ta register/unregister. JS tarafı `findNodeHandle` → aynı tag.
+5. **Threading (present):** `present()` JS thread'inde çalışır. iOS: batch'i kopyala → `dispatch_async(main)` → `renderSkia`. Android: batch'i C++ map'e koy (mutex) → JNI `postInvalidate` (thread'e attach) → UI thread `onDraw` → `nativeRender` saklı batch'i çizer. Skia/UI'a sadece doğru thread'den dokunulur.
+6. **DPR:** Komutlar logical px; `renderSkia`/`nativeRender` başında `canvas.scale(dpr,dpr)` (DESIGN §4). iOS `screen.scale`, Android `displayMetrics.density`.
+7. **Android jsi linki:** `android/build.gradle` `buildFeatures { prefab true }`; CMake `find_package(ReactAndroid CONFIG)` + `ReactAndroid::jsi`. (react-android prefab modülleri: `jsi`, `reactnative`, `hermestooling`.)
+8. **iOS podspec:** `source_files`'a `cpp/*.{h,cpp}` eklendi, `HEADER_SEARCH_PATHS`'e `cpp/`. jsi `<jsi/jsi.h>` React-jsi dep'inden, Skia header'ları mevcut third_party yolundan.
 
 ### Çalıştırma komutları (referans)
 ```bash

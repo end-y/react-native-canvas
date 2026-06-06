@@ -2000,7 +2000,7 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
-  Canvas: 1bbf67746fde39838f34ae9605131e84c039757f
+  Canvas: fa0e5cb66ade149c42e100fe42d86ace974561a0
   FBLazyVector: c00c20551d40126351a6783c47ce75f5b374851b
   hermes-engine: 24f9490d02248c259fe87026fab99a4998ae2f1e
   RCTDeprecation: 3bb167081b134461cfeb875ff7ae1945f8635257

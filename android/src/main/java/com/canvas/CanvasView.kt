@@ -14,40 +14,47 @@ class CanvasView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
   private var bitmap: Bitmap? = null
-  private var skColor: Int = Color.WHITE
+  private var skColor: Int = Color.TRANSPARENT
 
   init {
     // A plain View skips onDraw by default; we need it to blit the Skia bitmap.
     setWillNotDraw(false)
   }
 
-  // Skia CPU raster draws directly into the bitmap's pixels (see canvas_jni.cpp).
-  private external fun nativeRender(bitmap: Bitmap, color: Int)
+  // Registers this view (by react tag == id) so ctx.present() can reach it; the
+  // native side stores the batch and calls postInvalidate -> onDraw.
+  private external fun nativeRegister(view: CanvasView, tag: Int)
+  private external fun nativeUnregister(tag: Int)
+  // Renders the stored batch for `tag` directly into the bitmap's pixels.
+  private external fun nativeRender(bitmap: Bitmap, tag: Int, color: Int, scale: Float)
 
   fun setSkColor(color: Int) {
     skColor = color
-    renderSkia()
     invalidate()
+  }
+
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    if (id != NO_ID) nativeRegister(this, id)
+  }
+
+  override fun onDetachedFromWindow() {
+    if (id != NO_ID) nativeUnregister(id)
+    super.onDetachedFromWindow()
   }
 
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
-    renderSkia()
+    bitmap = if (w > 0 && h > 0) Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) else null
     invalidate()
-  }
-
-  private fun renderSkia() {
-    val w = width
-    val h = height
-    if (w <= 0 || h <= 0) return
-    val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    nativeRender(b, skColor)
-    bitmap = b
   }
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
-    bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+    val b = bitmap ?: return
+    // View dimensions are physical px; commands are logical px -> scale by DPR.
+    nativeRender(b, id, skColor, resources.displayMetrics.density)
+    canvas.drawBitmap(b, 0f, 0f, null)
   }
 
   companion object {

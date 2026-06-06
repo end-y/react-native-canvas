@@ -13,8 +13,9 @@ Pod::Spec.new do |s|
   s.platforms    = { :ios => min_ios_version_supported }
   s.source       = { :git => "https://github.com/enderyazici/react-native-canvas.git", :tag => "#{s.version}" }
 
-  # Only our own native sources — NOT the vendored Skia headers under ios/third_party.
-  s.source_files = "ios/*.{h,m,mm,swift,cpp}"
+  # Our iOS shim + the shared platform-neutral C++ core (cpp/). NOT the vendored
+  # Skia headers under ios/third_party.
+  s.source_files = "ios/*.{h,m,mm,swift,cpp}", "cpp/*.{h,cpp}"
   s.private_header_files = "ios/*.h"
   s.exclude_files = "ios/third_party/**/*"
 
@@ -24,7 +25,8 @@ Pod::Spec.new do |s|
 
   s.pod_target_xcconfig = {
     # Skia headers use root-relative includes: #include "include/core/SkCanvas.h"
-    "HEADER_SEARCH_PATHS" => "\"$(PODS_TARGET_SRCROOT)/third_party/skia\"",
+    # cpp/ is our shared core (headers included by the iOS shim too).
+    "HEADER_SEARCH_PATHS" => "\"$(PODS_TARGET_SRCROOT)/third_party/skia\" \"$(PODS_TARGET_SRCROOT)/cpp\"",
     "CLANG_CXX_LANGUAGE_STANDARD" => "c++20",
     # Our Skia is built with is_official_build => SK_RELEASE. In a Debug pod NDEBUG
     # is undefined, so without this Skia headers would assume SK_DEBUG and mismatch

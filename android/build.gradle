@@ -63,6 +63,8 @@ android {
 
   buildFeatures {
     buildConfig true
+    // Consume React Native's prefab modules (jsi) from the CMake build.
+    prefab true
   }
 
   buildTypes {
