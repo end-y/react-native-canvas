@@ -42,7 +42,22 @@ export interface Ctx {
   present(): void;
 }
 
-// Internal: the global the native side installs.
+// Per-frame info passed to a useCanvasFramer draw callback (DESIGN §3).
+export type FrameParams = {
+  width: number; // logical px
+  height: number; // logical px
+  dt: number; // seconds since last frame (frame-independent motion)
+  time: number; // seconds since the loop started
+  frame: number; // frame counter
+};
+
+export type DrawCallback = (ctx: Ctx, params: FrameParams) => void;
+
+// Internal: the globals the native side installs (cpp/CanvasInstaller + FrameLoop).
 declare global {
   var __rncanvasGetContext: ((tag: number) => Ctx) | undefined;
+  var __rncanvasStartLoop:
+    | ((tag: number, draw: DrawCallback) => void)
+    | undefined;
+  var __rncanvasStopLoop: ((tag: number) => void) | undefined;
 }

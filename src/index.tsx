@@ -1,3 +1,5 @@
 export { Canvas } from './Canvas';
 export type { CanvasHandle, CanvasProps } from './Canvas';
-export type { Ctx } from './types';
+export { useCanvasRef } from './useCanvasRef';
+export { useCanvasFramer } from './useCanvasFramer';
+export type { Ctx, FrameParams, DrawCallback } from './types';

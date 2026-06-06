@@ -19,6 +19,8 @@ add_library(canvas SHARED
   ${CORE_DIR}/CanvasContext.cpp
   ${CORE_DIR}/CanvasRenderer.cpp
   ${CORE_DIR}/CanvasRegistry.cpp
+  ${CORE_DIR}/CanvasRuntime.cpp
+  ${CORE_DIR}/FrameLoop.cpp
   ${CORE_DIR}/CanvasInstaller.cpp)
 
 target_include_directories(canvas PRIVATE ${SKIA_DIR} ${CORE_DIR})
@@ -26,8 +28,10 @@ target_include_directories(canvas PRIVATE ${SKIA_DIR} ${CORE_DIR})
 # Match the prebuilt lib's optimized (is_official_build => SK_RELEASE) ABI.
 target_compile_definitions(canvas PRIVATE SK_RELEASE=1)
 
-# React Native prefab: jsi (for the ctx HostObject install).
+# React Native prefab: jsi (ctx HostObject), reactnative (CallInvokerHolder for
+# the frame loop), fbjni (to read the holder).
 find_package(ReactAndroid REQUIRED CONFIG)
+find_package(fbjni REQUIRED CONFIG)
 
 find_library(log-lib log)
 find_library(jnigraphics-lib jnigraphics)
@@ -35,6 +39,8 @@ find_library(jnigraphics-lib jnigraphics)
 target_link_libraries(canvas
   skia
   ReactAndroid::jsi
+  ReactAndroid::reactnative
+  fbjni::fbjni
   ${log-lib}
   ${jnigraphics-lib}
   android)

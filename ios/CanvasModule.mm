@@ -9,6 +9,7 @@
 #import <CanvasViewSpecJSI.h>
 
 #import "CanvasInstaller.h"
+#import "CanvasRuntime.h"
 
 using namespace facebook;
 
@@ -30,6 +31,9 @@ RCT_EXPORT_MODULE(CanvasModule)
 - (void)installJSIBindingsWithRuntime:(jsi::Runtime &)runtime
                           callInvoker:(const std::shared_ptr<react::CallInvoker> &)callInvoker
 {
+  // The CallInvoker lets native vsync ticks hop onto the JS thread to run the
+  // user's draw callback (see cpp/CanvasRuntime + FrameLoop).
+  rncanvas::CanvasRuntime::instance().setCallInvoker(callInvoker);
   rncanvas::installCanvasApi(runtime);
 }
 

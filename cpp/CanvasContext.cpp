@@ -17,6 +17,11 @@ double num(const jsi::Value* args, size_t count, size_t i, double def = 0.0) {
 
 }  // namespace
 
+void CanvasContext::flush() {
+  if (flush_) flush_(commands_);
+  commands_.clear();
+}
+
 uint32_t CanvasContext::withAlpha(uint32_t color) const {
   uint32_t a = (color >> 24) & 0xFF;
   a = (uint32_t)std::lround(a * globalAlpha_);
@@ -171,8 +176,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   // automatically later). Renders the batched commands and clears the list.
   if (name == "present") {
     return method(0, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value*, size_t) {
-      if (flush_) flush_(commands_);
-      commands_.clear();
+      flush();
       return jsi::Value::undefined();
     });
   }

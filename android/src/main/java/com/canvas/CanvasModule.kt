@@ -13,14 +13,15 @@ class CanvasModule(private val reactContext: ReactApplicationContext) :
   override fun getName(): String = NAME
 
   override fun install(): Boolean {
-    val holder = reactContext.javaScriptContextHolder ?: return false
-    val runtimePtr = holder.get()
+    val runtimePtr = reactContext.javaScriptContextHolder?.get() ?: return false
     if (runtimePtr == 0L) return false
-    nativeInstall(runtimePtr)
+    val callInvokerHolder = reactContext.jsCallInvokerHolder ?: return false
+    nativeInstall(runtimePtr, callInvokerHolder)
     return true
   }
 
-  private external fun nativeInstall(runtimePtr: Long)
+  // callInvokerHolder is a CallInvokerHolderImpl; native reads it via fbjni.
+  private external fun nativeInstall(runtimePtr: Long, callInvokerHolder: Any)
 
   companion object {
     const val NAME = "CanvasModule"

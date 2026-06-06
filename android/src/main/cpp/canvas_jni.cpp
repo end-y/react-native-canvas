@@ -1,11 +1,14 @@
 // Android JNI shim. Bridges the Kotlin view + TurboModule to the shared C++
 // core (cpp/). Skia CPU raster draws directly into an Android Bitmap's locked
-// pixels (no copy).
+// pixels (no copy). The vsync source (Choreographer) lives in Kotlin; C++ asks
+// the view to start/stop it and receives ticks via nativeOnVsync.
 #include <jni.h>
 #include <android/bitmap.h>
 #include <android/log.h>
 
+#include <fbjni/fbjni.h>
 #include <jsi/jsi.h>
+#include <ReactCommon/CallInvokerHolder.h>
 
 #include <map>
 #include <mutex>
@@ -18,7 +21,9 @@
 #include "CanvasInstaller.h"
 #include "CanvasRegistry.h"
 #include "CanvasRenderer.h"
+#include "CanvasRuntime.h"
 #include "CommandList.h"
+#include "FrameLoop.h"
 
 #define LOG_TAG "RNCanvas"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -33,10 +38,10 @@ JavaVM* g_vm = nullptr;
 // from the UI thread in nativeRender).
 std::mutex g_mutex;
 std::map<int, rncanvas::CommandList> g_commands;
-std::map<int, jobject> g_viewRefs;  // global refs, for postInvalidate + cleanup
+std::map<int, jobject> g_viewRefs;  // global refs, for callbacks + cleanup
 
-// Calls view.postInvalidate() from any thread (attaches to the JVM if needed).
-void postInvalidate(jobject viewRef) {
+// Calls a no-arg void method on a view from any thread (attaches if needed).
+void callViewVoid(jobject viewRef, const char* method) {
   JNIEnv* env = nullptr;
   bool attached = false;
   if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
@@ -44,8 +49,13 @@ void postInvalidate(jobject viewRef) {
     attached = true;
   }
   jclass cls = env->GetObjectClass(viewRef);
-  jmethodID mid = env->GetMethodID(cls, "postInvalidate", "()V");
-  if (mid) env->CallVoidMethod(viewRef, mid);
+  jmethodID mid = env->GetMethodID(cls, method, "()V");
+  if (mid) {
+    env->CallVoidMethod(viewRef, mid);
+  } else {
+    env->ExceptionClear();  // don't leave a pending exception for the next call
+    LOGE("method %s()V not found on CanvasView", method);
+  }
   env->DeleteLocalRef(cls);
   if (attached) g_vm->DetachCurrentThread();
 }
@@ -54,17 +64,23 @@ void postInvalidate(jobject viewRef) {
 
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
   g_vm = vm;
-  return JNI_VERSION_1_6;
+  return jni::initialize(vm, [] {});
 }
 
-// --- TurboModule: install the JSI ctx API into the runtime ------------------
+// --- TurboModule: install JSI ctx API + capture the CallInvoker -------------
 extern "C" JNIEXPORT void JNICALL
-Java_com_canvas_CanvasModule_nativeInstall(JNIEnv*, jobject, jlong runtimePtr) {
+Java_com_canvas_CanvasModule_nativeInstall(JNIEnv*, jobject, jlong runtimePtr,
+                                           jobject callInvokerHolder) {
   if (runtimePtr == 0) {
     LOGE("nativeInstall: null runtime pointer");
     return;
   }
   auto* runtime = reinterpret_cast<jsi::Runtime*>(runtimePtr);
+
+  auto holder = jni::alias_ref<react::CallInvokerHolder::javaobject>{
+      static_cast<react::CallInvokerHolder::javaobject>(callInvokerHolder)};
+  rncanvas::CanvasRuntime::instance().setCallInvoker(holder->cthis()->getCallInvoker());
+
   rncanvas::installCanvasApi(*runtime);
 }
 
@@ -79,16 +95,19 @@ Java_com_canvas_CanvasView_nativeRegister(JNIEnv* env, jobject, jobject view, ji
     g_viewRefs[tag] = ref;
   }
 
-  // ctx.present() (JS thread) routes here: store the batch, then ask the view to
-  // redraw on the UI thread (onDraw -> nativeRender reads the batch).
   rncanvas::CanvasRegistry::instance().registerView(
-      tag, [tag, ref](const rncanvas::CommandList& commands) {
+      tag,
+      // flush: store the batch then redraw on the UI thread (onDraw -> render).
+      [tag, ref](const rncanvas::CommandList& commands) {
         {
           std::lock_guard<std::mutex> lock(g_mutex);
           g_commands[tag] = commands;
         }
-        postInvalidate(ref);
-      });
+        callViewVoid(ref, "postInvalidate");
+      },
+      // startVsync / stopVsync: ask the Kotlin view to drive Choreographer.
+      [ref] { callViewVoid(ref, "startVsync"); },
+      [ref] { callViewVoid(ref, "stopVsync"); });
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -101,6 +120,13 @@ Java_com_canvas_CanvasView_nativeUnregister(JNIEnv* env, jobject, jint tag) {
     env->DeleteGlobalRef(it->second);
     g_viewRefs.erase(it);
   }
+}
+
+// --- Vsync tick (from Kotlin Choreographer, UI thread) ----------------------
+extern "C" JNIEXPORT void JNICALL
+Java_com_canvas_CanvasView_nativeOnVsync(JNIEnv*, jobject, jint tag,
+                                         jdouble timestamp, jint width, jint height) {
+  rncanvas::onVsync(tag, timestamp, width, height);
 }
 
 // --- Render: replay the stored batch into the view's bitmap -----------------

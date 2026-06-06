@@ -17,6 +17,7 @@
 #include "CanvasRegistry.h"
 #include "CanvasRenderer.h"
 #include "CommandList.h"
+#include "FrameLoop.h"
 
 using namespace facebook::react;
 
@@ -24,6 +25,7 @@ using namespace facebook::react;
   UIView *_view;
   SkColor _bgColor;
   rncanvas::CommandList _commands;  // latest batch from ctx.present()
+  CADisplayLink *_displayLink;      // vsync source while a framer is active
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider
@@ -58,9 +60,9 @@ using namespace facebook::react;
   if (tag != 0) {
     __weak CanvasView *weakSelf = self;
     rncanvas::CanvasRegistry::instance().registerView(
-        (int)tag, [weakSelf](const rncanvas::CommandList &commands) {
-          // Called on the JS thread. Copy the batch and present on the main
-          // thread (UIView/CALayer are main-thread only).
+        (int)tag,
+        // flush: present a batch (JS thread -> main thread)
+        [weakSelf](const rncanvas::CommandList &commands) {
           auto batch = std::make_shared<rncanvas::CommandList>(commands);
           dispatch_async(dispatch_get_main_queue(), ^{
             CanvasView *strongSelf = weakSelf;
@@ -68,6 +70,17 @@ using namespace facebook::react;
               strongSelf->_commands = *batch;
               [strongSelf renderSkia];
             }
+          });
+        },
+        // startVsync / stopVsync (called from JS thread -> hop to main)
+        [weakSelf] {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf startVsync];
+          });
+        },
+        [weakSelf] {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf stopVsync];
           });
         });
   }
@@ -78,6 +91,29 @@ using namespace facebook::react;
   if (self.tag != 0) {
     rncanvas::CanvasRegistry::instance().unregisterView((int)self.tag);
   }
+  [_displayLink invalidate];
+}
+
+// --- Vsync (CADisplayLink, main thread) -------------------------------------
+- (void)startVsync
+{
+  if (_displayLink) {
+    return;
+  }
+  _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(step:)];
+  [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+- (void)stopVsync
+{
+  [_displayLink invalidate];
+  _displayLink = nil;
+}
+
+- (void)step:(CADisplayLink *)link
+{
+  CGSize sz = self.bounds.size;  // logical px (points)
+  rncanvas::onVsync((int)self.tag, link.timestamp, (int)sz.width, (int)sz.height);
 }
 
 - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &)oldProps

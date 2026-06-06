@@ -30,6 +30,11 @@ class CanvasContext : public facebook::jsi::HostObject {
   std::vector<facebook::jsi::PropNameID> getPropertyNames(
       facebook::jsi::Runtime& rt) override;
 
+  // Hands the batched commands to the flush callback (view renders + presents)
+  // and clears the list for the next frame. Used by both present() (manual) and
+  // the frame loop (after each draw callback).
+  void flush();
+
  private:
   // Folds the current globalAlpha into a color's alpha channel (ARGB).
   uint32_t withAlpha(uint32_t color) const;

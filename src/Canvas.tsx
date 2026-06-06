@@ -16,6 +16,9 @@ export interface CanvasHandle {
   // Returns the imperative drawing context bound to this view, or null if the
   // native view isn't mounted yet / the API failed to install.
   getContext(): Ctx | null;
+  // The native view tag (used by useCanvasFramer to bind the frame loop).
+  // Ensures the JSI API is installed. null if not mounted yet.
+  getTag(): number | null;
 }
 
 export type CanvasProps = ViewProps & {
@@ -37,6 +40,10 @@ export const Canvas = forwardRef(function CanvasComponent(
         const tag = findNodeHandle(nativeRef.current);
         if (tag == null) return null;
         return globalThis.__rncanvasGetContext(tag);
+      },
+      getTag() {
+        if (!ensureInstalled()) return null;
+        return findNodeHandle(nativeRef.current) ?? null;
       },
     }),
     []

@@ -321,15 +321,15 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 
 ## 11. Geliştirme sıralaması (öneri)
 
-> **Durum (güncel):** ✅ Adım 0-3 + Yol A + Yol B **tamamlandı.** İskelet kuruldu, baseline doğrulandı, **kendi derlediğimiz Skia (m148, CPU raster)** iOS + Android'de çiziyor, ve artık **`ctx` JSI HostObject gerçek imperatif API** ile çalışıyor: `<Canvas>` JS'ten `ctx.fillStyle/fillRect/arc/beginPath/moveTo/lineTo/stroke/globalAlpha...` çağrılarıyla çiziliyor. Sabit native çizim kaldırıldı; her iki platformda da **piksel-özdeş** sonuç JS'ten sürülüyor (paylaşılan `cpp/` çekirdeği). Bkz. §13 "Adım 3".
+> **Durum (güncel):** ✅ Adım 0-4 + Yol A + Yol B **tamamlandı.** İskelet kuruldu, baseline doğrulandı, **kendi derlediğimiz Skia (m148, CPU raster)** iOS + Android'de çiziyor, **`ctx` JSI HostObject** ile `<Canvas>` JS'ten imperatif çiziliyor, ve artık **native vsync'e bağlı frame loop** çalışıyor: `useCanvasFramer(ref, (ctx, params) => ...)` her vsync'te `dt`/`time`/`frame` ile çağrılıyor (CADisplayLink / Choreographer), try/catch'li. Her iki platformda da **dt-bazlı hareket** doğrulandı (zıplayan top). Bkz. §13 "Adım 3" + "Adım 4".
 >
-> **SIRADAKI:** Adım 4 → Frame loop. Şu an JS tek seferlik `ctx.present()` çağırıyor (köprü); sıradaki iş native vsync'i (`Choreographer`/`CADisplayLink`) bağlayıp `useCanvasFramer(ref, (ctx, params) => ...)` ile her frame otomatik flush + `dt`/`time`/`frame` + try/catch. Devamı: `useEntity`, `params` köprüsü, `onPress`. Varoluşsal risk bitti; buradan itibarı düz mühendislik.
+> **SIRADAKI:** Adım 5 → `useEntity` (kalıcı instance) + `params` köprüsü (deps snapshot) + `onPress` (canvas-local koordinat hit-testing). Sonra Adım 6 (GL/Ganesh backend, JS API değişmez) ve gerekirse perf (batch/instancing). Varoluşsal risk çoktan bitti; düz mühendislik.
 
 0. ✅ **İskelet + baseline:** `create-react-native-library` (fabric-view, kotlin-objc) ile `<CanvasView>` kuruldu; Android (Pixel 4 / API 34) ve iOS (iPhone 16 / iOS 26.5) üzerinde çalışan boş view doğrulandı.
 1. **Skia binary'lerini linkle** (Android + iOS) — ilk ve en kritik engel.
 2. **CPU raster ile "merhaba dünya":** tek renk dolu surface → ekrana bas. Present borusunu (GPU karmaşası olmadan) ispatla. Bir platformda birkaç gün önde gidilebilir, ama ikisi de v1'de.
 3. ✅ **`ctx` çekirdeği:** JSI HostObject + temel shape/path/transform + renk parse. **DOĞRULANDI** (iOS + Android).
-4. **Frame loop:** native vsync bağlama, `dt`, `useCanvasFramer`, try/catch.
+4. ✅ **Frame loop:** native vsync bağlama, `dt`, `useCanvasFramer`, try/catch. **DOĞRULANDI** (iOS + Android).
 5. **`useEntity` + `params` köprüsü + `onPress`.**
 6. **GL backend'e geçiş:** CPU raster yerine Ganesh/GL (JS API hiç değişmez).
 7. **İki platformu da tamamla** (paylaşılan çekirdek aynı, sadece shim'ler).
@@ -440,6 +440,27 @@ JS'ten sürülen gerçek imperatif çizim her iki platformda da render oldu (ayn
 6. **DPR:** Komutlar logical px; `renderSkia`/`nativeRender` başında `canvas.scale(dpr,dpr)` (DESIGN §4). iOS `screen.scale`, Android `displayMetrics.density`.
 7. **Android jsi linki:** `android/build.gradle` `buildFeatures { prefab true }`; CMake `find_package(ReactAndroid CONFIG)` + `ReactAndroid::jsi`. (react-android prefab modülleri: `jsi`, `reactnative`, `hermestooling`.)
 8. **iOS podspec:** `source_files`'a `cpp/*.{h,cpp}` eklendi, `HEADER_SEARCH_PATHS`'e `cpp/`. jsi `<jsi/jsi.h>` React-jsi dep'inden, Skia header'ları mevcut third_party yolundan.
+
+### Adım 4 — Native frame loop DOĞRULANDI ✅
+`useCanvasFramer` ile native vsync'e bağlı sürekli çizim her iki platformda da çalışıyor (zıplayan top, dt-bazlı, koyu zemin → pürüzsüz hareket). Native sürer (DESIGN §5/§7), JS callback her tick JS thread'inde çağrılır.
+
+**Akış (frame başına):** native vsync (main/UI thread) → `onVsync(tag, ts, w, h)` → `CallInvoker.invokeAsync` ile **JS thread'e** hop → `FrameLoop::tick`: `dt/time/frame` + `params` objesi → `drawFn(ctx, params)` (try/catch) → `ctx.flush()` → `CanvasRegistry.dispatch` → present (Adım 3 borusu, kendi thread'ine hop). İki thread-hop/frame; 0.1 için kabul.
+
+**Yeni paylaşılan çekirdek:**
+- `CanvasRuntime.{h,cpp}` — `CallInvoker`'ı tutar; `runOnJS(fn)` = `invokeAsync`. **Anahtar:** RN 0.85 `CallInvoker::invokeAsync(CallFunc&&)` imzası `CallFunc = std::function<void(jsi::Runtime&)>` → runtime'ı JS thread'inde ele veriyor (raw pointer saklamaya gerek yok).
+- `FrameLoop.{h,cpp}` — `FrameLoop` (kalıcı ctx + `jsi::Function` drawFn + `dt/time/frame`), tag→FrameLoop registry, `onVsync`, ve `__rncanvasStartLoop(tag, fn)` / `__rncanvasStopLoop(tag)` JSI globalleri. ctx kalıcı (state frame'ler arası korunur). drawFn deps değişince `setDrawFn` ile değiş(tiril)ir.
+- `CanvasContext::flush()` ayıklandı (present + frame loop ortak).
+- `CanvasRegistry` artık view başına `flush` + `startVsync` + `stopVsync` tutuyor.
+
+**Platform vsync (ince shim):**
+- iOS: `CADisplayLink` (main runloop). `startVsync`/`stopVsync` JS thread'inden gelir → `dispatch_async(main)` ile link kur/iptal et. Her tick `link.timestamp` + `bounds.size` (logical) → `onVsync`. CallInvoker install hook'undan (`installJSIBindingsWithRuntime:callInvoker:`) → `CanvasRuntime::setCallInvoker`.
+- Android: `Choreographer` Kotlin'de (UI thread). C++ `startVsync`/`stopVsync` VoidFn'leri JNI ile Kotlin `startVsync()`/`stopVsync()` çağırır; `Choreographer.FrameCallback` her frame `nativeOnVsync(id, ts, wLogical, hLogical)` → `onVsync`. CallInvoker: Kotlin `reactContext.jsCallInvokerHolder` → JNI'a `jobject` → fbjni `CallInvokerHolder::cthis()->getCallInvoker()`.
+
+**Kritik öğrenmeler:**
+1. **Kotlin `= post {}` tuzağı:** `fun startVsync() = post {...}` dönüş tipi **`Boolean`** (View.post → boolean) → JVM imzası `()Z`. JNI `GetMethodID(...,"()V")` bulamayıp `NoSuchMethodError` → bir sonraki JNI çağrısında CheckJNI **abort**. Çözüm: gövdeyi `{ post { ... } }` yapıp `Unit` döndür. (Ayrıca `callViewVoid`'e `ExceptionClear` guard eklendi.)
+2. **fbjni Android'de:** `CallInvokerHolder.h` (`reactnative` prefab) `cthis()` için fbjni init şart → `JNI_OnLoad`'da `jni::initialize(vm, []{})`. CMake'e `ReactAndroid::reactnative` + `fbjni::fbjni` link, `build.gradle`'a `com.facebook.fbjni:fbjni:0.7.0` (prefab keşfi için).
+3. **CallInvoker'ın runtime'ı:** `invokeAsync` lambda'sına gelen `jsi::Runtime&` JS thread'inde geçerli; tüm jsi çağrıları (params objesi, drawFn.call, flush) orada.
+4. **Çizim çağrısı:** `drawFn_.call(rt, jsi::Value(rt, *ctxValue_), std::move(params))` — ctx `jsi::Value` move-only olduğundan kopyasını (`Value(rt, ...)`) geçir; params'ı move et. ctx HostObject value'su lazy cache'lenir (frame başına alloc yok).
 
 ### Çalıştırma komutları (referans)
 ```bash

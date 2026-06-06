@@ -85,4 +85,6 @@ android {
 
 dependencies {
   implementation "com.facebook.react:react-android"
+  // For the CallInvokerHolder prefab consumed by CMake (frame loop threading).
+  implementation "com.facebook.fbjni:fbjni:0.7.0"
 }

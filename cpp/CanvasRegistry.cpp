@@ -7,9 +7,10 @@ CanvasRegistry& CanvasRegistry::instance() {
   return registry;
 }
 
-void CanvasRegistry::registerView(int tag, FlushFn fn) {
+void CanvasRegistry::registerView(int tag, FlushFn flush, VoidFn startVsync,
+                                  VoidFn stopVsync) {
   std::lock_guard<std::mutex> lock(mutex_);
-  views_[tag] = std::move(fn);
+  views_[tag] = ViewHooks{std::move(flush), std::move(startVsync), std::move(stopVsync)};
 }
 
 void CanvasRegistry::unregisterView(int tag) {
@@ -23,9 +24,31 @@ void CanvasRegistry::dispatch(int tag, const CommandList& commands) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = views_.find(tag);
     if (it == views_.end()) return;
-    fn = it->second;  // copy so we don't hold the lock during render
+    fn = it->second.flush;  // copy so we don't hold the lock during render
   }
   fn(commands);
+}
+
+void CanvasRegistry::startVsync(int tag) {
+  VoidFn fn;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = views_.find(tag);
+    if (it == views_.end() || !it->second.startVsync) return;
+    fn = it->second.startVsync;
+  }
+  fn();
+}
+
+void CanvasRegistry::stopVsync(int tag) {
+  VoidFn fn;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = views_.find(tag);
+    if (it == views_.end() || !it->second.stopVsync) return;
+    fn = it->second.stopVsync;
+  }
+  fn();
 }
 
 }  // namespace rncanvas

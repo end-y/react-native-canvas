@@ -6,6 +6,7 @@
 
 #include "CanvasContext.h"
 #include "CanvasRegistry.h"
+#include "FrameLoop.h"
 
 namespace rncanvas {
 
@@ -31,6 +32,9 @@ void installCanvasApi(jsi::Runtime& rt) {
       });
 
   rt.global().setProperty(rt, "__rncanvasGetContext", getContext);
+
+  // Frame loop API: __rncanvasStartLoop / __rncanvasStopLoop.
+  installFrameLoopApi(rt);
 }
 
 }  // namespace rncanvas
