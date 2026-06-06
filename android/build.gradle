@@ -36,10 +36,29 @@ android {
   namespace "com.canvas"
 
   compileSdkVersion getExtOrDefault("compileSdkVersion")
+  ndkVersion "27.1.12297006"
 
   defaultConfig {
     minSdkVersion getExtOrDefault("minSdkVersion")
     targetSdkVersion getExtOrDefault("targetSdkVersion")
+
+    externalNativeBuild {
+      cmake {
+        cppFlags "-std=c++20"
+        arguments "-DANDROID_STL=c++_shared"
+      }
+    }
+    ndk {
+      // Only arm64-v8a prebuilt Skia for now (Yol A bootstrap; Apple Silicon emulator).
+      abiFilters "arm64-v8a"
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path "CMakeLists.txt"
+      version "3.22.1"
+    }
   }
 
   buildFeatures {

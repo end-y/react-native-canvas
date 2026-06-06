@@ -32,7 +32,7 @@ class CanvasViewManager : SimpleViewManager<CanvasView>(),
 
   @ReactProp(name = "color")
   override fun setColor(view: CanvasView?, color: Int?) {
-    view?.setBackgroundColor(color ?: Color.TRANSPARENT)
+    view?.setSkColor(color ?: Color.WHITE)
   }
 
   companion object {
