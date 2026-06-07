@@ -12,9 +12,10 @@ add_library(skia STATIC IMPORTED)
 set_target_properties(skia PROPERTIES
   IMPORTED_LOCATION ${SKIA_DIR}/libs/android/${ANDROID_ABI}/libskia.a)
 
-# Shared platform-neutral core (cpp/) + the Android JNI shim.
+# Shared platform-neutral core (cpp/) + the Android JNI shim + GPU renderer.
 add_library(canvas SHARED
   src/main/cpp/canvas_jni.cpp
+  src/main/cpp/AndroidGpuSurface.cpp
   ${CORE_DIR}/ColorParser.cpp
   ${CORE_DIR}/CanvasContext.cpp
   ${CORE_DIR}/CanvasRenderer.cpp
@@ -25,8 +26,9 @@ add_library(canvas SHARED
 
 target_include_directories(canvas PRIVATE ${SKIA_DIR} ${CORE_DIR})
 
-# Match the prebuilt lib's optimized (is_official_build => SK_RELEASE) ABI.
-target_compile_definitions(canvas PRIVATE SK_RELEASE=1)
+# Match the prebuilt lib: optimized (is_official_build => SK_RELEASE) + GPU
+# (Ganesh GL). SK_GANESH/SK_GL expose the GPU headers matching the lib's ABI.
+target_compile_definitions(canvas PRIVATE SK_RELEASE=1 SK_GANESH=1 SK_GL=1)
 
 # React Native prefab: jsi (ctx HostObject), reactnative (CallInvokerHolder for
 # the frame loop), fbjni (to read the holder).
@@ -34,7 +36,8 @@ find_package(ReactAndroid REQUIRED CONFIG)
 find_package(fbjni REQUIRED CONFIG)
 
 find_library(log-lib log)
-find_library(jnigraphics-lib jnigraphics)
+find_library(egl-lib EGL)
+find_library(gles-lib GLESv2)
 
 target_link_libraries(canvas
   skia
@@ -42,5 +45,6 @@ target_link_libraries(canvas
   ReactAndroid::reactnative
   fbjni::fbjni
   ${log-lib}
-  ${jnigraphics-lib}
+  ${egl-lib}
+  ${gles-lib}
   android)

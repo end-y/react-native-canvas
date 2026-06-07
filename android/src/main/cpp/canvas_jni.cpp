@@ -1,26 +1,21 @@
-// Android JNI shim. Bridges the Kotlin view + TurboModule to the shared C++
-// core (cpp/). Skia CPU raster draws directly into an Android Bitmap's locked
-// pixels (no copy). The vsync source (Choreographer) lives in Kotlin; C++ asks
-// the view to start/stop it and receives ticks via nativeOnVsync.
+// Android JNI shim. Bridges the Kotlin SurfaceView + TurboModule to the shared
+// C++ core (cpp/) and the GPU renderer (AndroidGpuSurface: EGL + Skia Ganesh).
+// ctx.present() -> FlushFn -> AndroidGpuSurface::render (own render thread).
 #include <jni.h>
-#include <android/bitmap.h>
 #include <android/log.h>
+#include <android/native_window_jni.h>
 
 #include <fbjni/fbjni.h>
 #include <jsi/jsi.h>
 #include <ReactCommon/CallInvokerHolder.h>
 
 #include <map>
+#include <memory>
 #include <mutex>
 
-#include "include/core/SkBitmap.h"
-#include "include/core/SkCanvas.h"
-#include "include/core/SkColor.h"
-#include "include/core/SkImageInfo.h"
-
+#include "AndroidGpuSurface.h"
 #include "CanvasInstaller.h"
 #include "CanvasRegistry.h"
-#include "CanvasRenderer.h"
 #include "CanvasRuntime.h"
 #include "CommandList.h"
 #include "FrameLoop.h"
@@ -34,11 +29,9 @@ namespace {
 
 JavaVM* g_vm = nullptr;
 
-// Latest command batch per view tag (written from the JS thread on flush, read
-// from the UI thread in nativeRender).
 std::mutex g_mutex;
-std::map<int, rncanvas::CommandList> g_commands;
-std::map<int, jobject> g_viewRefs;  // global refs, for callbacks + cleanup
+std::map<int, jobject> g_viewRefs;  // global refs, for startVsync/stopVsync
+std::map<int, std::unique_ptr<rncanvas::AndroidGpuSurface>> g_gpu;
 
 // Calls a no-arg void method on a view from any thread (attaches if needed).
 void callViewVoid(jobject viewRef, const char* method) {
@@ -53,7 +46,7 @@ void callViewVoid(jobject viewRef, const char* method) {
   if (mid) {
     env->CallVoidMethod(viewRef, mid);
   } else {
-    env->ExceptionClear();  // don't leave a pending exception for the next call
+    env->ExceptionClear();
     LOGE("method %s()V not found on CanvasView", method);
   }
   env->DeleteLocalRef(cls);
@@ -97,13 +90,11 @@ Java_com_canvas_CanvasView_nativeRegister(JNIEnv* env, jobject, jobject view, ji
 
   rncanvas::CanvasRegistry::instance().registerView(
       tag,
-      // flush: store the batch then redraw on the UI thread (onDraw -> render).
-      [tag, ref](const rncanvas::CommandList& commands) {
-        {
-          std::lock_guard<std::mutex> lock(g_mutex);
-          g_commands[tag] = commands;
-        }
-        callViewVoid(ref, "postInvalidate");
+      // flush: hand the batch to the GPU renderer (its own render thread).
+      [tag](const rncanvas::CommandList& commands) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        auto it = g_gpu.find(tag);
+        if (it != g_gpu.end()) it->second->render(commands);
       },
       // startVsync / stopVsync: ask the Kotlin view to drive Choreographer.
       [ref] { callViewVoid(ref, "startVsync"); },
@@ -114,7 +105,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_canvas_CanvasView_nativeUnregister(JNIEnv* env, jobject, jint tag) {
   rncanvas::CanvasRegistry::instance().unregisterView(tag);
   std::lock_guard<std::mutex> lock(g_mutex);
-  g_commands.erase(tag);
+  g_gpu.erase(tag);  // stops the render thread + tears down EGL/Skia
   auto it = g_viewRefs.find(tag);
   if (it != g_viewRefs.end()) {
     env->DeleteGlobalRef(it->second);
@@ -122,50 +113,41 @@ Java_com_canvas_CanvasView_nativeUnregister(JNIEnv* env, jobject, jint tag) {
   }
 }
 
+// --- SurfaceView lifecycle --------------------------------------------------
+extern "C" JNIEXPORT void JNICALL
+Java_com_canvas_CanvasView_nativeSurfaceChanged(JNIEnv* env, jobject, jint tag,
+                                                jobject surface, jint width,
+                                                jint height, jint color,
+                                                jfloat scale) {
+  ANativeWindow* window = ANativeWindow_fromSurface(env, surface);  // +1 ref
+  if (!window) {
+    LOGE("ANativeWindow_fromSurface failed");
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_mutex);
+  auto& gpu = g_gpu[tag];
+  if (!gpu) gpu = std::make_unique<rncanvas::AndroidGpuSurface>();
+  gpu->setColor((uint32_t)color);
+  gpu->setWindow(window, width, height, scale);  // takes the window ref
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_canvas_CanvasView_nativeSurfaceDestroyed(JNIEnv*, jobject, jint tag) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  auto it = g_gpu.find(tag);
+  if (it != g_gpu.end()) it->second->clearWindow();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_canvas_CanvasView_nativeSetColor(JNIEnv*, jobject, jint tag, jint color) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  auto it = g_gpu.find(tag);
+  if (it != g_gpu.end()) it->second->setColor((uint32_t)color);
+}
+
 // --- Vsync tick (from Kotlin Choreographer, UI thread) ----------------------
 extern "C" JNIEXPORT void JNICALL
 Java_com_canvas_CanvasView_nativeOnVsync(JNIEnv*, jobject, jint tag,
                                          jdouble timestamp, jint width, jint height) {
   rncanvas::onVsync(tag, timestamp, width, height);
-}
-
-// --- Render: replay the stored batch into the view's bitmap -----------------
-extern "C" JNIEXPORT void JNICALL
-Java_com_canvas_CanvasView_nativeRender(JNIEnv* env, jobject, jobject bitmap,
-                                        jint tag, jint color, jfloat scale) {
-  AndroidBitmapInfo info;
-  if (AndroidBitmap_getInfo(env, bitmap, &info) < 0) {
-    LOGE("AndroidBitmap_getInfo failed");
-    return;
-  }
-  if (info.format != ANDROID_BITMAP_FORMAT_RGBA_8888) {
-    LOGE("unexpected bitmap format %d", info.format);
-    return;
-  }
-
-  void* pixels = nullptr;
-  if (AndroidBitmap_lockPixels(env, bitmap, &pixels) < 0) {
-    LOGE("AndroidBitmap_lockPixels failed");
-    return;
-  }
-
-  // Android ARGB_8888 is RGBA in memory => kRGBA_8888. SkColor is logical ARGB.
-  SkImageInfo skInfo = SkImageInfo::Make((int)info.width, (int)info.height,
-                                         kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-  SkBitmap skBitmap;
-  skBitmap.installPixels(skInfo, pixels, info.stride);
-
-  SkCanvas canvas(skBitmap);
-  canvas.clear((SkColor)color);
-  canvas.scale(scale, scale);  // commands use logical px; apply DPR (DESIGN §4)
-
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    auto it = g_commands.find(tag);
-    if (it != g_commands.end()) {
-      rncanvas::renderCommands(&canvas, it->second);
-    }
-  }
-
-  AndroidBitmap_unlockPixels(env, bitmap);
 }

@@ -323,7 +323,9 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 
 > **Durum (güncel):** ✅ Adım 0-5 + Yol A + Yol B **tamamlandı.** Kendi Skia'mız (m148, CPU raster) iki platformda çiziyor, **`ctx` JSI HostObject** ile `<Canvas>` JS'ten imperatif çiziliyor, **native vsync frame loop** (`useCanvasFramer`, `dt`/`time`/`frame`) çalışıyor, ve artık **`useEntity` + `onPress`** de var. **Public API (§3) tamamen bitti.** Örnek: dokunarak baloncuk ekle/patlat (BubbleSystem) — Android'de deterministik doğrulandı, iOS'ta render+framer doğrulandı. Bkz. §13 "Adım 3/4/5".
 >
-> **SIRADAKI (opsiyonel, 0.1 için şart değil):** Adım 6 → GL/Ganesh backend (CPU raster yerine; JS API hiç değişmez, perf). Sonra paketleme/cila: `bob build`, README, gerçek cihaz testi, npm publish, lib strip/xcframework. Stretch ctx op'ları (§4: `quadraticCurveTo`, `bezierCurveTo`, `ellipse`, `lineCap/Join`, `clip`, `setTransform`) Skia'da kolay, zaman kalırsa.
+> **Adım 6 (kısmen):** ✅ **Android GPU/Ganesh backend DOĞRULANDI** — CPU raster yerine GL. Ölçüm: 3000 baloncuk **21fps → 60fps (5x)**, 60fps tavanı ~600'den ~3500'e; UI thread serbest. JS API hiç değişmedi. **iOS Metal backend = faz 2 (sıradaki).** Bkz. §13 "Adım 6".
+>
+> **SIRADAKI:** iOS Metal backend (Skia iOS lib'lerini Metal ile yeniden derle + CAMetalLayer shim). Sonra paketleme/cila: `bob build`, README, gerçek cihaz testi, npm publish. Stretch ctx op'ları (§4: `quadraticCurveTo`, `bezierCurveTo`, `ellipse`, `lineCap/Join`, `clip`, `setTransform`) ve perf v2 (instancing/drawAtlas) zaman kalırsa.
 
 0. ✅ **İskelet + baseline:** `create-react-native-library` (fabric-view, kotlin-objc) ile `<CanvasView>` kuruldu; Android (Pixel 4 / API 34) ve iOS (iPhone 16 / iOS 26.5) üzerinde çalışan boş view doğrulandı.
 1. **Skia binary'lerini linkle** (Android + iOS) — ilk ve en kritik engel.
@@ -331,7 +333,7 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 3. ✅ **`ctx` çekirdeği:** JSI HostObject + temel shape/path/transform + renk parse. **DOĞRULANDI** (iOS + Android).
 4. ✅ **Frame loop:** native vsync bağlama, `dt`, `useCanvasFramer`, try/catch. **DOĞRULANDI** (iOS + Android).
 5. ✅ **`useEntity` + `params` köprüsü + `onPress`.** **DOĞRULANDI** (Android deterministik; iOS render+framer).
-6. **GL backend'e geçiş:** CPU raster yerine Ganesh/GL (JS API hiç değişmez).
+6. 🟡 **GL backend'e geçiş:** CPU raster yerine Ganesh/GL (JS API hiç değişmez). **Android DOĞRULANDI**; iOS Metal sırada.
 7. **İki platformu da tamamla** (paylaşılan çekirdek aynı, sadece shim'ler).
 
 ---
@@ -477,6 +479,27 @@ Public API (§3) tamamlandı. Örnek `BubbleSystem`: canvasa dokun → baloncuk 
 **Kritik öğrenmeler:**
 1. **`onPress` adı rezerve:** RN codegen `onPress`'i bilinen **bubbling** event sayıyor; `DirectEventHandler` ile çakışıp iOS'ta runtime hatası: *"Event cannot be both direct and bubbling: topPress"*. Çözüm: native event'i **`onCanvasPress`** adıyla aç, public API'de `<Canvas onPress>` olarak sun (sarmalda eşle). (Android bu çakışmayı vermedi ama yine de tutarlılık için yeniden adlandırıldı.)
 2. **Strict-API codegen type'ları:** Proje `tsconfig` `customConditions: ["react-native-strict-api"]` kullanıyor → RN `exports` tüm alt-yol importlarını (`react-native/Libraries/...`) **bloklar** (null). Codegen tipleri `'react-native'` ana girişinden namespace olarak gelir: `import { type CodegenTypes } from 'react-native'` → `CodegenTypes.DirectEventHandler` / `CodegenTypes.Double`.
+
+### Adım 6 (Android) — GPU/Ganesh backend DOĞRULANDI ✅
+CPU raster (her frame bitmap'i UI thread'de çiz + `drawBitmap` upload) → **GPU rasterizasyonu (Skia Ganesh, GL/EGL)**, ayrı render thread'de.
+
+**Önce ölçüm (körlemesine optimize etme):** `dumpsys gfxinfo` + JS FPS log ile darboğaz ayrıştırıldı. Bulgu: present/upload **değil** (3000'de GPU sadece 3-7ms), **CPU rasterizasyonu** darboğaz (UI thread süresi nesne sayısıyla doğrusal: 300→12ms, 1500→42ms, 3000→81ms). Yani doğru çözüm GPU.
+
+**Sonuç (emülatör, Apple Silicon):** 3000 baloncuk **CPU 21fps → GPU 60fps (5x)**; 60fps tavanı CPU ~600 → GPU ~3500. 8000→28fps, 15000→15fps. JS hep 60 (UI thread serbest; render thread geride kalırsa "latest-wins" ile frame düşürür). Gerçek cihazda kazanç daha büyük (CPU raster orada çok daha yavaş).
+
+**Mimari (Android):**
+- `CanvasView` artık `SurfaceView` (`SurfaceHolder.Callback`). `surfaceChanged` → `nativeSurfaceChanged(tag, holder.surface, w, h, color, dpr)`; `surfaceDestroyed` → `nativeSurfaceDestroyed`. `onDraw`/`Bitmap` yok.
+- `AndroidGpuSurface` (C++, `android/src/main/cpp/`): **ayrı render thread** + EGL (display/config/ES2 context/window-surface) + `GrDirectContexts::MakeGL` + `SkSurfaces::WrapBackendRenderTarget` (FBO 0, `kBottomLeft_GrSurfaceOrigin`, stencil 8). `render(commands)` JS thread'inden "latest-wins" kuyruğa koyar → render thread: makeCurrent → `renderCommands` → `flushAndSubmit` → `eglSwapBuffers`. Tüm GL/Skia-GPU işi tek thread'de (context thread-affine).
+- `ANativeWindow_fromSurface` (JNI) ile Surface → ANativeWindow; refcount render thread'de yönetilir.
+- Paylaşılan `renderCommands` **hiç değişmedi** — sadece SkCanvas artık GPU-backed surface'ten geliyor (PlatformSurface soyutlaması bunun içindi).
+
+**Skia rebuild:** `~/skia-build/skia` silinmişti → yeniden `clone -b chrome/m148` + `git-sync-deps` (retry'li) + `gn`/`ninja`. GN args: `skia_enable_ganesh=true skia_use_gl=true` (Android), `skia_use_metal=true` (Apple). Sadece Android lib'leri yeniden derlendi (10MB→18/19MB). **Header'lar değişmedi** — `include/` statik kaynak, GPU header'ları (`gpu/ganesh/...`) zaten oradaydı; consumer tarafında `SK_GANESH`/`SK_GL` define edilince görünür (CMake). iOS hâlâ CPU lib (faz 2'de Metal).
+
+**Kritik öğrenmeler:**
+1. **Önce ölç:** "her frame bitmap upload" korkulan darboğaz sanılıyordu; gfxinfo GPU süresi 3-7ms çıkınca asıl suçlunun CPU raster olduğu netleşti. Yanlış optimizasyondan kurtardı.
+2. **Header/lib eşleşmesi macro ile:** Ganesh header'ları `#if defined(SK_GANESH)`/`SK_GL` ile gate'li; lib GPU ile derlenip consumer'da define edilmezse API görünmez. Tek `include/` ağacı tüm platformlara yeter — her platform kendi macro'sunu set eder (Android: SK_GANESH+SK_GL; iOS şimdilik hiçbiri = CPU).
+3. **Thread-affinity:** EGL context + GrDirectContext tek thread'de yaratılıp kullanılıp yok edilmeli. Render thread döngüsü hem surface yaşam döngüsünü (create/resize/destroy) hem çizimi tek yerde tutar.
+4. **Decoupling:** vsync UI thread'de (Choreographer) → JS tick → flush → render thread. UI thread artık çizmediğinden vsync hep 60; ağır sahnede render thread frame düşürür ama JS mantığı 60'ta kalır.
 
 ### Çalıştırma komutları (referans)
 ```bash

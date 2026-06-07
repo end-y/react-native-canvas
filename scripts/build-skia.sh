@@ -4,8 +4,9 @@
 # Produces libskia.a for: iOS device arm64, iOS sim arm64, Android arm64-v8a, Android x86_64,
 # then copies headers (matched to the libs) + libs into third_party/skia.
 #
-# Skia milestone: chrome/m148. Minimal feature set: no GPU (ganesh/gl/metal/vulkan),
-# no text (icu/harfbuzz/paragraph), no svg, no image codecs, no freetype.
+# Skia milestone: chrome/m148. GPU via Ganesh: GL on Android, Metal on Apple
+# (Vulkan stays off). Still no text (icu/harfbuzz/paragraph), no svg, no image
+# codecs, no freetype.
 #
 # One-time source setup:
 #   git clone https://skia.googlesource.com/skia.git "$SKIA_SRC"
@@ -18,7 +19,8 @@ SKIA_SRC="${SKIA_SRC:-$HOME/skia-build/skia}"
 NDK="${ANDROID_NDK:-$HOME/Library/Android/sdk/ndk/27.1.12297006}"
 DEST="$(cd "$(dirname "$0")/.." && pwd)/third_party/skia"
 
-COMMON='is_official_build=true skia_enable_ganesh=false skia_use_gl=false skia_use_metal=false skia_use_vulkan=false skia_use_icu=false skia_use_harfbuzz=false skia_enable_skparagraph=false skia_enable_skshaper=false skia_enable_svg=false skia_use_expat=false skia_use_libjpeg_turbo_decode=false skia_use_libjpeg_turbo_encode=false skia_use_libpng_decode=false skia_use_libpng_encode=false skia_use_libwebp_decode=false skia_use_libwebp_encode=false skia_use_freetype=false'
+# Ganesh on; per-target backend (GL/Metal) added below. Vulkan + text + codecs off.
+COMMON='is_official_build=true skia_enable_ganesh=true skia_use_vulkan=false skia_use_icu=false skia_use_harfbuzz=false skia_enable_skparagraph=false skia_enable_skshaper=false skia_enable_svg=false skia_use_expat=false skia_use_libjpeg_turbo_decode=false skia_use_libjpeg_turbo_encode=false skia_use_libpng_decode=false skia_use_libpng_encode=false skia_use_libwebp_decode=false skia_use_libwebp_encode=false skia_use_freetype=false'
 
 cd "$SKIA_SRC"
 
@@ -28,10 +30,10 @@ build() { # <outdir> <extra gn args>
   third_party/ninja/ninja -C "out/$1" skia
 }
 
-build ios-sim-arm64 'target_os="ios" target_cpu="arm64" ios_use_simulator=true  ios_min_target="15.0"'
-build ios-arm64     'target_os="ios" target_cpu="arm64" ios_use_simulator=false ios_min_target="15.0" skia_ios_use_signing=false'
-build android-arm64 "target_os=\"android\" target_cpu=\"arm64\" ndk=\"$NDK\" ndk_api=24"
-build android-x64   "target_os=\"android\" target_cpu=\"x64\"   ndk=\"$NDK\" ndk_api=24"
+build ios-sim-arm64 'target_os="ios" target_cpu="arm64" ios_use_simulator=true  ios_min_target="15.0" skia_use_metal=true'
+build ios-arm64     'target_os="ios" target_cpu="arm64" ios_use_simulator=false ios_min_target="15.0" skia_ios_use_signing=false skia_use_metal=true'
+build android-arm64 "target_os=\"android\" target_cpu=\"arm64\" ndk=\"$NDK\" ndk_api=24 skia_use_gl=true"
+build android-x64   "target_os=\"android\" target_cpu=\"x64\"   ndk=\"$NDK\" ndk_api=24 skia_use_gl=true"
 
 echo ">>> copying headers + libs into $DEST"
 rm -rf "$DEST/include" "$DEST/modules"
