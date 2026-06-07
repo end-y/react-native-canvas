@@ -21,13 +21,18 @@ export interface CanvasHandle {
   getTag(): number | null;
 }
 
+// Canvas-local tap coordinate (logical px). Hit-testing is the user's job
+// (DESIGN §3) — the canvas doesn't know what shapes are drawn in it.
+export type CanvasPressEvent = { x: number; y: number };
+
 export type CanvasProps = ViewProps & {
   // Background clear color for the Skia surface (optional).
   color?: ColorValue;
+  onPress?: (e: CanvasPressEvent) => void;
 };
 
 export const Canvas = forwardRef(function CanvasComponent(
-  props: CanvasProps,
+  { onPress, ...rest }: CanvasProps,
   ref: Ref<CanvasHandle>
 ) {
   const nativeRef = useRef(null);
@@ -49,5 +54,15 @@ export const Canvas = forwardRef(function CanvasComponent(
     []
   );
 
-  return <CanvasNativeComponent ref={nativeRef} {...props} />;
+  return (
+    <CanvasNativeComponent
+      ref={nativeRef}
+      {...rest}
+      onCanvasPress={
+        onPress
+          ? (e) => onPress({ x: e.nativeEvent.x, y: e.nativeEvent.y })
+          : undefined
+      }
+    />
+  );
 });

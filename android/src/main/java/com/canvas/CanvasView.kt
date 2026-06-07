@@ -6,7 +6,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.util.AttributeSet
 import android.view.Choreographer
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
+import com.facebook.react.bridge.ReactContext
+import com.facebook.react.uimanager.UIManagerHelper
 
 class CanvasView @JvmOverloads constructor(
   context: Context?,
@@ -18,9 +22,43 @@ class CanvasView @JvmOverloads constructor(
   private var skColor: Int = Color.TRANSPARENT
   private var vsyncRunning = false
 
+  // Detects taps; emits onPress with canvas-local logical px (DESIGN §3).
+  private val gestureDetector =
+    GestureDetector(
+      context,
+      object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(e: MotionEvent): Boolean = true
+
+        override fun onSingleTapUp(e: MotionEvent): Boolean {
+          emitPress(e.x, e.y)
+          return true
+        }
+      }
+    )
+
   init {
     // A plain View skips onDraw by default; we need it to blit the Skia bitmap.
     setWillNotDraw(false)
+  }
+
+  @Suppress("ClickableViewAccessibility")
+  override fun onTouchEvent(event: MotionEvent): Boolean {
+    gestureDetector.onTouchEvent(event)
+    return true
+  }
+
+  private fun emitPress(px: Float, py: Float) {
+    val reactContext = context as? ReactContext ?: return
+    val dispatcher = UIManagerHelper.getEventDispatcherForReactTag(reactContext, id) ?: return
+    val density = resources.displayMetrics.density
+    dispatcher.dispatchEvent(
+      OnPressEvent(
+        UIManagerHelper.getSurfaceId(this),
+        id,
+        (px / density).toDouble(),
+        (py / density).toDouble()
+      )
+    )
   }
 
   // Registers this view (by react tag == id) so ctx.present() can reach it; the

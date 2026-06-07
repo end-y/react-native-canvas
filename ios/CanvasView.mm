@@ -3,6 +3,7 @@
 #import <React/RCTConversions.h>
 
 #import <react/renderer/components/CanvasViewSpec/ComponentDescriptors.h>
+#import <react/renderer/components/CanvasViewSpec/EventEmitters.h>
 #import <react/renderer/components/CanvasViewSpec/Props.h>
 #import <react/renderer/components/CanvasViewSpec/RCTComponentViewHelpers.h>
 
@@ -42,9 +43,25 @@ using namespace facebook::react;
 
     _view = [[UIView alloc] init];
     self.contentView = _view;
+
+    UITapGestureRecognizer *tap =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
+    [self addGestureRecognizer:tap];
   }
 
   return self;
+}
+
+// Emits onPress with canvas-local logical px (points). Hit-testing is the user's
+// job (DESIGN §3).
+- (void)handleTap:(UITapGestureRecognizer *)gr
+{
+  if (!_eventEmitter) {
+    return;
+  }
+  CGPoint p = [gr locationInView:self];
+  auto emitter = std::static_pointer_cast<const CanvasViewEventEmitter>(_eventEmitter);
+  emitter->onCanvasPress(CanvasViewEventEmitter::OnCanvasPress{.x = p.x, .y = p.y});
 }
 
 // The Fabric mounting registry sets view.tag = reactTag on mount, and 0 on

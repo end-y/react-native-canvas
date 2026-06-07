@@ -49,6 +49,8 @@ export type FrameParams = {
   dt: number; // seconds since last frame (frame-independent motion)
   time: number; // seconds since the loop started
   frame: number; // frame counter
+  // A copy of the deps passed to useCanvasFramer, flowing into each frame.
+  depsSnapshot?: ReadonlyArray<unknown>;
 };
 
 export type DrawCallback = (ctx: Ctx, params: FrameParams) => void;

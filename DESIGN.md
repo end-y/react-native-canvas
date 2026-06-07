@@ -321,16 +321,16 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 
 ## 11. Geliştirme sıralaması (öneri)
 
-> **Durum (güncel):** ✅ Adım 0-4 + Yol A + Yol B **tamamlandı.** İskelet kuruldu, baseline doğrulandı, **kendi derlediğimiz Skia (m148, CPU raster)** iOS + Android'de çiziyor, **`ctx` JSI HostObject** ile `<Canvas>` JS'ten imperatif çiziliyor, ve artık **native vsync'e bağlı frame loop** çalışıyor: `useCanvasFramer(ref, (ctx, params) => ...)` her vsync'te `dt`/`time`/`frame` ile çağrılıyor (CADisplayLink / Choreographer), try/catch'li. Her iki platformda da **dt-bazlı hareket** doğrulandı (zıplayan top). Bkz. §13 "Adım 3" + "Adım 4".
+> **Durum (güncel):** ✅ Adım 0-5 + Yol A + Yol B **tamamlandı.** Kendi Skia'mız (m148, CPU raster) iki platformda çiziyor, **`ctx` JSI HostObject** ile `<Canvas>` JS'ten imperatif çiziliyor, **native vsync frame loop** (`useCanvasFramer`, `dt`/`time`/`frame`) çalışıyor, ve artık **`useEntity` + `onPress`** de var. **Public API (§3) tamamen bitti.** Örnek: dokunarak baloncuk ekle/patlat (BubbleSystem) — Android'de deterministik doğrulandı, iOS'ta render+framer doğrulandı. Bkz. §13 "Adım 3/4/5".
 >
-> **SIRADAKI:** Adım 5 → `useEntity` (kalıcı instance) + `params` köprüsü (deps snapshot) + `onPress` (canvas-local koordinat hit-testing). Sonra Adım 6 (GL/Ganesh backend, JS API değişmez) ve gerekirse perf (batch/instancing). Varoluşsal risk çoktan bitti; düz mühendislik.
+> **SIRADAKI (opsiyonel, 0.1 için şart değil):** Adım 6 → GL/Ganesh backend (CPU raster yerine; JS API hiç değişmez, perf). Sonra paketleme/cila: `bob build`, README, gerçek cihaz testi, npm publish, lib strip/xcframework. Stretch ctx op'ları (§4: `quadraticCurveTo`, `bezierCurveTo`, `ellipse`, `lineCap/Join`, `clip`, `setTransform`) Skia'da kolay, zaman kalırsa.
 
 0. ✅ **İskelet + baseline:** `create-react-native-library` (fabric-view, kotlin-objc) ile `<CanvasView>` kuruldu; Android (Pixel 4 / API 34) ve iOS (iPhone 16 / iOS 26.5) üzerinde çalışan boş view doğrulandı.
 1. **Skia binary'lerini linkle** (Android + iOS) — ilk ve en kritik engel.
 2. **CPU raster ile "merhaba dünya":** tek renk dolu surface → ekrana bas. Present borusunu (GPU karmaşası olmadan) ispatla. Bir platformda birkaç gün önde gidilebilir, ama ikisi de v1'de.
 3. ✅ **`ctx` çekirdeği:** JSI HostObject + temel shape/path/transform + renk parse. **DOĞRULANDI** (iOS + Android).
 4. ✅ **Frame loop:** native vsync bağlama, `dt`, `useCanvasFramer`, try/catch. **DOĞRULANDI** (iOS + Android).
-5. **`useEntity` + `params` köprüsü + `onPress`.**
+5. ✅ **`useEntity` + `params` köprüsü + `onPress`.** **DOĞRULANDI** (Android deterministik; iOS render+framer).
 6. **GL backend'e geçiş:** CPU raster yerine Ganesh/GL (JS API hiç değişmez).
 7. **İki platformu da tamamla** (paylaşılan çekirdek aynı, sadece shim'ler).
 
@@ -461,6 +461,22 @@ JS'ten sürülen gerçek imperatif çizim her iki platformda da render oldu (ayn
 2. **fbjni Android'de:** `CallInvokerHolder.h` (`reactnative` prefab) `cthis()` için fbjni init şart → `JNI_OnLoad`'da `jni::initialize(vm, []{})`. CMake'e `ReactAndroid::reactnative` + `fbjni::fbjni` link, `build.gradle`'a `com.facebook.fbjni:fbjni:0.7.0` (prefab keşfi için).
 3. **CallInvoker'ın runtime'ı:** `invokeAsync` lambda'sına gelen `jsi::Runtime&` JS thread'inde geçerli; tüm jsi çağrıları (params objesi, drawFn.call, flush) orada.
 4. **Çizim çağrısı:** `drawFn_.call(rt, jsi::Value(rt, *ctxValue_), std::move(params))` — ctx `jsi::Value` move-only olduğundan kopyasını (`Value(rt, ...)`) geçir; params'ı move et. ctx HostObject value'su lazy cache'lenir (frame başına alloc yok).
+
+### Adım 5 — useEntity + params + onPress DOĞRULANDI ✅
+Public API (§3) tamamlandı. Örnek `BubbleSystem`: canvasa dokun → baloncuk ekle (boşsa) / patlat (üstündeyse). Android'de `adb input tap` ile deterministik doğrulandı (5 dokunuş → 5 hareketli baloncuk; spawn = onPress koordinatı doğru akıyor). iOS'ta render+framer doğrulandı (otomatik dokunma aracı yoktu).
+
+**JS (saf):**
+- `useEntity(factory)` — `useRef` + lazy init; kalıcı instance (render'lar arası). Kütüphane "entity"yi bilmez.
+- `useCanvasFramer` **refactor:** artık native loop'a **bir kez** abone olur (timing sürekli kalır), her render'da en güncel `draw`+`deps`'i ref'lerden okur (stable trampoline). Böylece yeni closure her frame taze deps görür; `params.depsSnapshot`'a da yazılır. (Önceki sürüm deps değişince loop'u durdurup yeniden başlatıyordu → timing sıfırlanıyordu.)
+
+**onPress — Fabric codegen DirectEvent (iki platform):**
+- Spec: `onCanvasPress: CodegenTypes.DirectEventHandler<{x,y}>`. iOS emitter `CanvasViewEventEmitter::onCanvasPress`, Android event `topCanvasPress`. Public `<Canvas onPress>` JS sarmalı, native `nativeEvent.{x,y}` → düz `{x,y}` (DESIGN §3 hit-testing kullanıcının işi).
+- iOS: `UITapGestureRecognizer` → `locationInView` (logical pt) → `emitter->onCanvasPress({x,y})`.
+- Android: `GestureDetector.onSingleTapUp` → `OnPressEvent(surfaceId, id, px/density, py/density)` → `UIManagerHelper.getEventDispatcherForReactTag(...).dispatchEvent(...)`. ViewManager `getExportedCustomDirectEventTypeConstants` → `topCanvasPress`→`onCanvasPress`.
+
+**Kritik öğrenmeler:**
+1. **`onPress` adı rezerve:** RN codegen `onPress`'i bilinen **bubbling** event sayıyor; `DirectEventHandler` ile çakışıp iOS'ta runtime hatası: *"Event cannot be both direct and bubbling: topPress"*. Çözüm: native event'i **`onCanvasPress`** adıyla aç, public API'de `<Canvas onPress>` olarak sun (sarmalda eşle). (Android bu çakışmayı vermedi ama yine de tutarlılık için yeniden adlandırıldı.)
+2. **Strict-API codegen type'ları:** Proje `tsconfig` `customConditions: ["react-native-strict-api"]` kullanıyor → RN `exports` tüm alt-yol importlarını (`react-native/Libraries/...`) **bloklar** (null). Codegen tipleri `'react-native'` ana girişinden namespace olarak gelir: `import { type CodegenTypes } from 'react-native'` → `CodegenTypes.DirectEventHandler` / `CodegenTypes.Double`.
 
 ### Çalıştırma komutları (referans)
 ```bash
