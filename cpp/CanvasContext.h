@@ -10,6 +10,8 @@
 #include <jsi/jsi.h>
 
 #include <functional>
+#include <string>
+#include <unordered_map>
 
 #include "CommandList.h"
 
@@ -41,6 +43,12 @@ class CanvasContext : public facebook::jsi::HostObject {
 
   FlushFn flush_;
   CommandList commands_;
+
+  // Cache of method host-functions keyed by name. Hermes does NOT cache
+  // HostObject property gets, so without this every `ctx.arc(...)` would rebuild
+  // the function (alloc + std::function) — ~N allocations/frame. Built lazily on
+  // first access, then reused for the runtime's lifetime.
+  std::unordered_map<std::string, facebook::jsi::Value> methodCache_;
 
   // Current drawing state (preserved across frames, per DESIGN §4).
   uint32_t fillColor_ = 0xFF000000;    // black

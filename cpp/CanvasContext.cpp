@@ -40,10 +40,20 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   if (name == "lineWidth") return jsi::Value((double)lineWidth_);
   if (name == "globalAlpha") return jsi::Value((double)globalAlpha_);
 
-  // --- Methods: each returns a host function that appends a Command ---
-  auto method = [&](unsigned argc, jsi::HostFunctionType fn) {
-    return jsi::Function::createFromHostFunction(
+  // --- Methods: built once, then cached (see methodCache_). Fast path first, so
+  // a hot call like ctx.arc(...) never rebuilds the function or its lambda. ---
+  {
+    auto it = methodCache_.find(name);
+    if (it != methodCache_.end()) return jsi::Value(rt, it->second);
+  }
+
+  // Cache miss: build the host function, store it, and return it. Each branch
+  // below calls method(argc, lambda); the lambda is only constructed on a miss.
+  auto method = [&](unsigned argc, jsi::HostFunctionType fn) -> jsi::Value {
+    jsi::Function f = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, name), argc, std::move(fn));
+    methodCache_.emplace(name, jsi::Value(rt, f));
+    return jsi::Value(rt, f);
   };
 
   // Rects -------------------------------------------------------------------
