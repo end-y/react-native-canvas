@@ -323,9 +323,9 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 
 > **Durum (güncel):** ✅ Adım 0-5 + Yol A + Yol B **tamamlandı.** Kendi Skia'mız (m148, CPU raster) iki platformda çiziyor, **`ctx` JSI HostObject** ile `<Canvas>` JS'ten imperatif çiziliyor, **native vsync frame loop** (`useCanvasFramer`, `dt`/`time`/`frame`) çalışıyor, ve artık **`useEntity` + `onPress`** de var. **Public API (§3) tamamen bitti.** Örnek: dokunarak baloncuk ekle/patlat (BubbleSystem) — Android'de deterministik doğrulandı, iOS'ta render+framer doğrulandı. Bkz. §13 "Adım 3/4/5".
 >
-> **Adım 6 (kısmen):** ✅ **Android GPU/Ganesh backend DOĞRULANDI** — CPU raster yerine GL. Ölçüm: 3000 baloncuk **21fps → 60fps (5x)**, 60fps tavanı ~600'den ~3500'e; UI thread serbest. JS API hiç değişmedi. **iOS Metal backend = faz 2 (sıradaki).** Bkz. §13 "Adım 6".
+> **Adım 6 (TAMAMLANDI):** ✅ **GPU/Ganesh backend iki platformda da DOĞRULANDI.** Android: GL, 3000 baloncuk **21fps → 60fps (5x)**. iOS: **Metal (CAMetalLayer + Ganesh)**, gerçek iPhone 13'te doğrulandı; render **ayrı render thread'e** alındı (Android'le simetrik `MetalCanvasSurface`), main thread vsync/UI için serbest. JS API hiç değişmedi. Ek olarak **ctx method host-function'ları cache'lendi** (Hermes HostObject tuzağı: her `ctx.arc` yeniden fonksiyon allocate ediyordu → frame başına ~N alloc; iki platforma da yarar). Bkz. §13 "Adım 6".
 >
-> **SIRADAKI:** iOS Metal backend (Skia iOS lib'lerini Metal ile yeniden derle + CAMetalLayer shim). Sonra paketleme/cila: `bob build`, README, gerçek cihaz testi, npm publish. Stretch ctx op'ları (§4: `quadraticCurveTo`, `bezierCurveTo`, `ellipse`, `lineCap/Join`, `clip`, `setTransform`) ve perf v2 (instancing/drawAtlas) zaman kalırsa.
+> **SIRADAKI:** Paketleme/cila: `bob build`, README, npm publish. Stretch ctx op'ları (§4: `quadraticCurveTo`, `bezierCurveTo`, `ellipse`, `lineCap/Join`, `clip`, `setTransform`) ve perf v2 (instancing/drawAtlas, command-list kopyasını azaltma) zaman kalırsa.
 
 0. ✅ **İskelet + baseline:** `create-react-native-library` (fabric-view, kotlin-objc) ile `<CanvasView>` kuruldu; Android (Pixel 4 / API 34) ve iOS (iPhone 16 / iOS 26.5) üzerinde çalışan boş view doğrulandı.
 1. **Skia binary'lerini linkle** (Android + iOS) — ilk ve en kritik engel.
@@ -333,8 +333,8 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 3. ✅ **`ctx` çekirdeği:** JSI HostObject + temel shape/path/transform + renk parse. **DOĞRULANDI** (iOS + Android).
 4. ✅ **Frame loop:** native vsync bağlama, `dt`, `useCanvasFramer`, try/catch. **DOĞRULANDI** (iOS + Android).
 5. ✅ **`useEntity` + `params` köprüsü + `onPress`.** **DOĞRULANDI** (Android deterministik; iOS render+framer).
-6. 🟡 **GL backend'e geçiş:** CPU raster yerine Ganesh/GL (JS API hiç değişmez). **Android DOĞRULANDI**; iOS Metal sırada.
-7. **İki platformu da tamamla** (paylaşılan çekirdek aynı, sadece shim'ler).
+6. ✅ **GPU backend'e geçiş:** CPU raster yerine Ganesh (JS API hiç değişmez). **Android (GL) + iOS (Metal) DOĞRULANDI**; render ayrı thread'de (her iki platform).
+7. ✅ **İki platformu da tamamla** (paylaşılan çekirdek aynı, sadece shim'ler) — Android + iOS GPU + decoupled render thread.
 
 ---
 
@@ -493,13 +493,31 @@ CPU raster (her frame bitmap'i UI thread'de çiz + `drawBitmap` upload) → **GP
 - `ANativeWindow_fromSurface` (JNI) ile Surface → ANativeWindow; refcount render thread'de yönetilir.
 - Paylaşılan `renderCommands` **hiç değişmedi** — sadece SkCanvas artık GPU-backed surface'ten geliyor (PlatformSurface soyutlaması bunun içindi).
 
-**Skia rebuild:** `~/skia-build/skia` silinmişti → yeniden `clone -b chrome/m148` + `git-sync-deps` (retry'li) + `gn`/`ninja`. GN args: `skia_enable_ganesh=true skia_use_gl=true` (Android), `skia_use_metal=true` (Apple). Sadece Android lib'leri yeniden derlendi (10MB→18/19MB). **Header'lar değişmedi** — `include/` statik kaynak, GPU header'ları (`gpu/ganesh/...`) zaten oradaydı; consumer tarafında `SK_GANESH`/`SK_GL` define edilince görünür (CMake). iOS hâlâ CPU lib (faz 2'de Metal).
+**Skia rebuild:** `~/skia-build/skia` silinmişti → yeniden `clone -b chrome/m148` + `git-sync-deps` (retry'li) + `gn`/`ninja`. GN args: `skia_enable_ganesh=true skia_use_gl=true` (Android), `skia_use_metal=true` (Apple). Android lib'leri yeniden derlendi (10MB→18/19MB). **Header'lar değişmedi** — `include/` statik kaynak, GPU header'ları (`gpu/ganesh/...`) zaten oradaydı; consumer tarafında `SK_GANESH`/`SK_GL` define edilince görünür (CMake). iOS Metal lib'leri ayrı bir fazda derlendi (bkz. "Adım 6 (iOS)").
 
 **Kritik öğrenmeler:**
 1. **Önce ölç:** "her frame bitmap upload" korkulan darboğaz sanılıyordu; gfxinfo GPU süresi 3-7ms çıkınca asıl suçlunun CPU raster olduğu netleşti. Yanlış optimizasyondan kurtardı.
 2. **Header/lib eşleşmesi macro ile:** Ganesh header'ları `#if defined(SK_GANESH)`/`SK_GL` ile gate'li; lib GPU ile derlenip consumer'da define edilmezse API görünmez. Tek `include/` ağacı tüm platformlara yeter — her platform kendi macro'sunu set eder (Android: SK_GANESH+SK_GL; iOS şimdilik hiçbiri = CPU).
 3. **Thread-affinity:** EGL context + GrDirectContext tek thread'de yaratılıp kullanılıp yok edilmeli. Render thread döngüsü hem surface yaşam döngüsünü (create/resize/destroy) hem çizimi tek yerde tutar.
 4. **Decoupling:** vsync UI thread'de (Choreographer) → JS tick → flush → render thread. UI thread artık çizmediğinden vsync hep 60; ağır sahnede render thread frame düşürür ama JS mantığı 60'ta kalır.
+
+### Adım 6 (iOS) — Metal/Ganesh backend + decoupled render thread DOĞRULANDI ✅
+CPU raster (her frame `SkBitmap` → `CGImage` → `layer.contents`) → **GPU rasterizasyonu (Skia Ganesh, Metal)**, **ayrı render thread'de**. Gerçek **iPhone 13 (A15)** cihazda doğrulandı.
+
+**İlk geçiş (main-thread render) → decoupling:** Önce Metal render main thread'de çalışıyordu (vsync + render aynı thread'de yarışıyordu). Sonra Android'le simetri için ayrı render thread'e taşındı.
+
+**Mimari (iOS):**
+- `CanvasView` artık `CAMetalLayer` destekli (`CanvasMetalView`: `+layerClass` → `CAMetalLayer`). `layoutSubviews` yalnızca `drawableSize`/`contentsScale` set eder; `updateProps` arka plan rengini, ikisi de surface'e iletilir.
+- `MetalCanvasSurface` (C++/ObjC++, `ios/`): **ayrı render thread** + `std::condition_variable` + "latest-wins" `std::optional<CommandList>` + `GrDirectContexts::MakeMetal` + her frame `nextDrawable` → `SkSurfaces::WrapBackendRenderTarget` (`kTopLeft_GrSurfaceOrigin`, `kBGRA_8888`) → `renderCommands` → `flushAndSubmit` → `MTLCommandBuffer presentDrawable+commit`. Tüm Metal/Skia-GPU işi tek thread'de (GrContext thread-affine; teardown'da render thread'de `abandonContext`). `AndroidGpuSurface`'in birebir simetriği.
+- Paylaşılan `renderCommands` **hiç değişmedi** — Android'le aynı çekirdek.
+
+**Skia rebuild:** iOS lib'leri `skia_use_metal=true` ile yeniden derlendi (12MB → 23MB; Ganesh+Metal). Podspec: `SK_GANESH=1 SK_METAL=1` + `Metal`, `QuartzCore` framework'leri. Header'lar değişmedi (tek `include/` ağacı; Apple'da `SK_METAL`, Android'de `SK_GL`).
+
+**Kritik öğrenmeler:**
+1. **JS↔native mount race (boş ekran):** Embedded bundle'da (Metro yokken) JS, native view mount'undan önce `__rncanvasStartLoop` çağırabiliyor → `startVsync` view'ı bulamayıp sessizce dönüyordu, loop hiç başlamıyordu. Çözüm: `CanvasRegistry` startVsync isteğini kuyruğa alır, `registerView` gelince tetikler (`useCanvasFramer` ayrıca tag çözülene dek `rAF` ile retry eder).
+2. **`SkColorSpace` incomplete type:** `SkSurface.h` yalnızca forward-declare eder; `WrapBackendRenderTarget` tam tanım ister → `#include "include/core/SkColorSpace.h"` (Android'de de aynı).
+3. **ctx host-function cache:** Hermes HostObject property get'lerini cache'lemediğinden her `ctx.arc` yeni fonksiyon allocate ediyordu (frame başına ~N). `CanvasContext` artık method fonksiyonlarını isimle cache'liyor — JS thread'inde per-call alloc sıfırlandı (iki platforma da yarar).
+4. **Önce ölç:** Simulator (Apple Silicon GPU) darboğazı gizliyordu (8000'de bile 60fps); gerçek cihazda asıl kısıtlar (frame başına JS/JSI çağrısı, command-list kopyası) görünür. Örnek app perf harness'a çevrildi (FPS + 1k/3k/8k yük + chunked fill + renk-bucket batch draw).
 
 ### Çalıştırma komutları (referans)
 ```bash
@@ -514,11 +532,16 @@ adb reverse tcp:8081 tcp:8081
 yarn example start                     # Metro
 adb shell monkey -p canvas.example -c android.intent.category.LAUNCHER 1
 
-# iOS
+# iOS (simulator)
 (cd example/ios && pod install)
 xcrun simctl boot "<UDID>"             # iOS 26.5 cihazı
 (cd example/ios && xcodebuild -workspace CanvasExample.xcworkspace -scheme CanvasExample \
   -configuration Debug -destination 'id=<UDID>' -derivedDataPath build build)
 xcrun simctl install "<UDID>" example/ios/build/Build/Products/Debug-iphonesimulator/CanvasExample.app
 xcrun simctl launch "<UDID>" canvas.example
+
+# iOS (gerçek cihaz) — code signing için Xcode'da Team seç (Automatically manage signing)
+xcrun devicectl list devices           # cihaz UDID'ini bul (paired/available)
+yarn example start                     # Metro (aynı Wi-Fi)
+yarn example ios --device              # build + install + launch
 ```
