@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build our own minimal (CPU-only raster) Skia static libs for react-native-canvas.
-# Produces libskia.a for: iOS device arm64, iOS sim arm64, Android arm64-v8a, Android x86_64,
-# then copies headers (matched to the libs) + libs into third_party/skia.
+# Build our own minimal (GPU-enabled, no text/codecs) Skia static libs for
+# react-native-canvas. Produces libskia.a for: iOS device arm64, iOS sim arm64,
+# Android arm64-v8a, Android x86_64, then copies headers (matched to the libs) +
+# libs into third_party/skia.
 #
 # Skia milestone: chrome/m148. GPU via Ganesh: GL on Android, Metal on Apple
 # (Vulkan stays off). Still no text (icu/harfbuzz/paragraph), no svg, no image

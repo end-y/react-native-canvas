@@ -9,13 +9,22 @@ CanvasRegistry& CanvasRegistry::instance() {
 
 void CanvasRegistry::registerView(int tag, FlushFn flush, VoidFn startVsync,
                                   VoidFn stopVsync) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  views_[tag] = ViewHooks{std::move(flush), std::move(startVsync), std::move(stopVsync)};
+  VoidFn pendingFn;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    views_[tag] = ViewHooks{std::move(flush), std::move(startVsync), std::move(stopVsync)};
+    // If JS called startVsync before native was mounted, fire it now.
+    if (pendingStartVsync_.erase(tag)) {
+      pendingFn = views_[tag].startVsync;
+    }
+  }
+  if (pendingFn) pendingFn();
 }
 
 void CanvasRegistry::unregisterView(int tag) {
   std::lock_guard<std::mutex> lock(mutex_);
   views_.erase(tag);
+  pendingStartVsync_.erase(tag);
 }
 
 void CanvasRegistry::dispatch(int tag, const CommandList& commands) {
@@ -34,7 +43,12 @@ void CanvasRegistry::startVsync(int tag) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = views_.find(tag);
-    if (it == views_.end() || !it->second.startVsync) return;
+    if (it == views_.end()) {
+      // View not mounted yet — queue the request; registerView will fire it.
+      pendingStartVsync_.insert(tag);
+      return;
+    }
+    if (!it->second.startVsync) return;
     fn = it->second.startVsync;
   }
   fn();

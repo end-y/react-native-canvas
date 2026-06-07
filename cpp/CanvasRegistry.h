@@ -7,6 +7,7 @@
 #include <functional>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "CommandList.h"
 
@@ -22,13 +23,16 @@ class CanvasRegistry {
 
   static CanvasRegistry& instance();
 
+  // Register a view's callbacks. If startVsync was already requested for this
+  // tag (JS side raced ahead of native mount), calls startVsync immediately.
   void registerView(int tag, FlushFn flush, VoidFn startVsync, VoidFn stopVsync);
   void unregisterView(int tag);
 
   // Routes a batch to the view with `tag`. No-op if none registered.
   void dispatch(int tag, const CommandList& commands);
 
-  // Start/stop the vsync source for `tag`. No-op if none registered.
+  // Start/stop the vsync source for `tag`. If the view is not yet registered
+  // (JS beat native mount), the request is queued and fired in registerView.
   void startVsync(int tag);
   void stopVsync(int tag);
 
@@ -41,6 +45,8 @@ class CanvasRegistry {
 
   std::mutex mutex_;
   std::unordered_map<int, ViewHooks> views_;
+  // Tags for which startVsync was called before registerView arrived.
+  std::unordered_set<int> pendingStartVsync_;
 };
 
 }  // namespace rncanvas

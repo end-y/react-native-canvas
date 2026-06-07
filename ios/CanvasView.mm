@@ -1,5 +1,8 @@
 #import "CanvasView.h"
 
+#import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
+
 #import <React/RCTConversions.h>
 
 #import <react/renderer/components/CanvasViewSpec/ComponentDescriptors.h>
@@ -9,24 +12,34 @@
 
 #import "RCTFabricComponentsPlugins.h"
 
-// Skia (our own m148 build, CPU raster)
-#include "include/core/SkBitmap.h"
-#include "include/core/SkCanvas.h"
+// Skia (our own m148 build) — only SkColor for the background prop; all GPU
+// rendering lives in MetalCanvasSurface (its own render thread).
 #include "include/core/SkColor.h"
 
-// Shared C++ core
+// Shared C++ core + the iOS GPU surface (render thread).
 #include "CanvasRegistry.h"
-#include "CanvasRenderer.h"
 #include "CommandList.h"
 #include "FrameLoop.h"
+#include "MetalCanvasSurface.h"
 
 using namespace facebook::react;
 
+// A view whose backing layer IS a CAMetalLayer (canonical Metal setup; the layer
+// tracks the view's frame automatically and composites correctly).
+@interface CanvasMetalView : UIView
+@end
+@implementation CanvasMetalView
++ (Class)layerClass { return [CAMetalLayer class]; }
+@end
+
 @implementation CanvasView {
-  UIView *_view;
+  CanvasMetalView *_view;
+  CAMetalLayer *_metalLayer;
+  id<MTLDevice> _device;
   SkColor _bgColor;
-  rncanvas::CommandList _commands;  // latest batch from ctx.present()
-  CADisplayLink *_displayLink;      // vsync source while a framer is active
+  float _scale;  // DPR, written on the main thread (layoutSubviews)
+  CADisplayLink *_displayLink;
+  std::unique_ptr<rncanvas::MetalCanvasSurface> _surface;  // owns render thread
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider
@@ -40,9 +53,23 @@ using namespace facebook::react;
     static const auto defaultProps = std::make_shared<const CanvasViewProps>();
     _props = defaultProps;
     _bgColor = SkColorSetARGB(0, 0, 0, 0);  // transparent until a color prop arrives
+    _scale = UIScreen.mainScreen.scale;
 
-    _view = [[UIView alloc] init];
+    _view = [[CanvasMetalView alloc] init];
     self.contentView = _view;
+
+    _device = MTLCreateSystemDefaultDevice();
+    _metalLayer = (CAMetalLayer *)_view.layer;
+    _metalLayer.device = _device;
+    _metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    _metalLayer.framebufferOnly = NO;  // Skia renders into the drawable texture
+    _metalLayer.opaque = NO;
+
+    // GPU rendering runs on the surface's own render thread; the main thread is
+    // left free for vsync + UI (mirrors AndroidGpuSurface). The layer/device are
+    // touched only by the render thread after this hand-off.
+    _surface = std::make_unique<rncanvas::MetalCanvasSurface>();
+    _surface->setLayer((__bridge void *)_metalLayer, (__bridge void *)_device, _scale);
 
     UITapGestureRecognizer *tap =
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
@@ -65,8 +92,7 @@ using namespace facebook::react;
 }
 
 // The Fabric mounting registry sets view.tag = reactTag on mount, and 0 on
-// recycle (RCTComponentViewRegistry). Hook both to register/unregister this
-// view's render callback so ctx.present() (from the JS thread) can reach it.
+// recycle (RCTComponentViewRegistry). Hook both to register/unregister.
 - (void)setTag:(NSInteger)tag
 {
   NSInteger old = self.tag;
@@ -78,16 +104,14 @@ using namespace facebook::react;
     __weak CanvasView *weakSelf = self;
     rncanvas::CanvasRegistry::instance().registerView(
         (int)tag,
-        // flush: present a batch (JS thread -> main thread)
+        // flush: hand the batch to the render thread (latest wins). Called on the
+        // JS thread; the surface copies + coalesces, so the JS thread never waits
+        // on the GPU and the main thread stays free (decoupled, like Android).
         [weakSelf](const rncanvas::CommandList &commands) {
-          auto batch = std::make_shared<rncanvas::CommandList>(commands);
-          dispatch_async(dispatch_get_main_queue(), ^{
-            CanvasView *strongSelf = weakSelf;
-            if (strongSelf) {
-              strongSelf->_commands = *batch;
-              [strongSelf renderSkia];
-            }
-          });
+          CanvasView *strongSelf = weakSelf;
+          if (strongSelf && strongSelf->_surface) {
+            strongSelf->_surface->render(commands);
+          }
         },
         // startVsync / stopVsync (called from JS thread -> hop to main)
         [weakSelf] {
@@ -109,6 +133,7 @@ using namespace facebook::react;
     rncanvas::CanvasRegistry::instance().unregisterView((int)self.tag);
   }
   [_displayLink invalidate];
+  _surface.reset();  // stops + joins the render thread before the view goes away
 }
 
 // --- Vsync (CADisplayLink, main thread) -------------------------------------
@@ -145,7 +170,9 @@ using namespace facebook::react;
       [c getRed:&r green:&g blue:&b alpha:&a];
     }
     _bgColor = SkColorSetARGB((U8CPU)(a * 255), (U8CPU)(r * 255), (U8CPU)(g * 255), (U8CPU)(b * 255));
-    [self renderSkia];
+    if (_surface) {
+      _surface->setColor((uint32_t)_bgColor);
+    }
   }
 
   [super updateProps:props oldProps:oldProps];
@@ -155,47 +182,18 @@ using namespace facebook::react;
 {
   [super layoutSubviews];
   _view.frame = self.bounds;
-  [self renderSkia];
-}
 
-// Rasterizes the current command batch with Skia and presents it as the view's
-// layer contents. Commands use logical px; the DPR scale is applied here so the
-// surface is crisp (DESIGN §4).
-- (void)renderSkia
-{
   CGFloat scale = self.window ? self.window.screen.scale : UIScreen.mainScreen.scale;
-  CGSize sz = self.bounds.size;
-  int w = (int)(sz.width * scale);
-  int h = (int)(sz.height * scale);
-  if (w <= 0 || h <= 0) {
-    return;
+  _scale = (float)scale;
+  // _metalLayer IS _view.layer, so it tracks _view.frame automatically; we just
+  // set the pixel-accurate drawable size. The render thread reads the layer's
+  // drawableSize when it acquires the next drawable.
+  _metalLayer.contentsScale = scale;
+  _metalLayer.drawableSize =
+      CGSizeMake(_view.bounds.size.width * scale, _view.bounds.size.height * scale);
+  if (_surface) {
+    _surface->setDpr(_scale);
   }
-
-  // Explicit BGRA premultiplied so the byte layout matches the CGImage flags
-  // below. (Our Skia's kN32 is RGBA, so we must not rely on N32 here.)
-  SkBitmap bitmap;
-  bitmap.allocPixels(SkImageInfo::Make(w, h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
-
-  SkCanvas canvas(bitmap);
-  canvas.clear(_bgColor);
-  canvas.scale((SkScalar)scale, (SkScalar)scale);
-  rncanvas::renderCommands(&canvas, _commands);
-
-  // Wrap the raster pixels in a CGImage (N32 on Apple == BGRA premultiplied).
-  size_t rowBytes = bitmap.rowBytes();
-  size_t byteCount = rowBytes * (size_t)h;
-  CFDataRef data = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)bitmap.getPixels(), byteCount);
-  CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
-  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-  CGBitmapInfo bmInfo = kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little;
-  CGImageRef img = CGImageCreate(w, h, 8, 32, rowBytes, cs, bmInfo, provider, NULL, false, kCGRenderingIntentDefault);
-
-  _view.layer.contents = (__bridge_transfer id)img;
-  _view.layer.contentsScale = scale;
-
-  CGColorSpaceRelease(cs);
-  CGDataProviderRelease(provider);
-  CFRelease(data);
 }
 
 @end
