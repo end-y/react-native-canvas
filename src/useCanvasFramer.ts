@@ -22,15 +22,31 @@ export function useCanvasFramer(
   depsRef.current = deps;
 
   useEffect(() => {
-    const tag = ref.current?.getTag();
-    if (tag == null || !globalThis.__rncanvasStartLoop) return;
+    let activeTag: number | null = null;
+    let cancelled = false;
 
-    // Stable trampoline: reads the latest draw/deps on every frame.
-    globalThis.__rncanvasStartLoop(tag, (ctx, params) => {
-      params.depsSnapshot = depsRef.current;
-      drawRef.current(ctx, params);
-    });
-    return () => globalThis.__rncanvasStopLoop?.(tag);
+    // The native view tag may not be resolvable on the very first commit; retry
+    // on the next frame(s) until it is, then subscribe the loop once.
+    const tryStart = () => {
+      if (cancelled || activeTag != null) return;
+      const tag = ref.current?.getTag();
+      if (tag == null || !globalThis.__rncanvasStartLoop) {
+        requestAnimationFrame(tryStart);
+        return;
+      }
+      activeTag = tag;
+      // Stable trampoline: reads the latest draw/deps on every frame.
+      globalThis.__rncanvasStartLoop(tag, (ctx, params) => {
+        params.depsSnapshot = depsRef.current;
+        drawRef.current(ctx, params);
+      });
+    };
+    tryStart();
+
+    return () => {
+      cancelled = true;
+      if (activeTag != null) globalThis.__rncanvasStopLoop?.(activeTag);
+    };
     // Subscribe once for this canvas; latest draw/deps flow via the refs above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -35,6 +35,7 @@ RCT_EXPORT_MODULE(CanvasModule)
   // user's draw callback (see cpp/CanvasRuntime + FrameLoop).
   rncanvas::CanvasRuntime::instance().setCallInvoker(callInvoker);
   rncanvas::installCanvasApi(runtime);
+  NSLog(@"[RNCanvas] installJSIBindings done");
 }
 
 - (std::shared_ptr<react::TurboModule>)getTurboModule:(const react::ObjCTurboModule::InitParams &)params
