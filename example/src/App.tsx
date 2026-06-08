@@ -6,6 +6,8 @@ import {
   useCanvasFramer,
   useEntity,
   type Ctx,
+  type Path2D,
+  type InstanceData,
 } from 'react-native-canvas';
 
 const COLORS = ['#3478f6', '#f6493b', '#34c759', '#ffd60a', '#bf5af2'];
@@ -20,7 +22,7 @@ const GROUP_CAP = 16000;
 
 // Structure-of-Arrays storage for one color's bubbles. Positions/radii live in
 // Float32Arrays so update() is a tight typed-array loop and draw() can hand the
-// arrays straight to ctx.fillCircles (one JSI call, no per-frame copy).
+// arrays straight to ctx.fillInstances (one JSI call, no per-frame copy).
 class ColorGroup {
   xs = new Float32Array(GROUP_CAP);
   ys = new Float32Array(GROUP_CAP);
@@ -28,6 +30,10 @@ class ColorGroup {
   vxs = new Float32Array(GROUP_CAP);
   vys = new Float32Array(GROUP_CAP);
   count = 0;
+
+  // Cached InstanceData view for fillInstances: a unit-circle template scaled
+  // per-bubble by its radius (scale = rs). Built once over the fixed arrays.
+  data: InstanceData = { x: this.xs, y: this.ys, scale: this.rs };
 
   add(x: number, y: number, r: number, vx: number, vy: number) {
     const i = this.count;
@@ -56,12 +62,17 @@ class ColorGroup {
 
 // A single entity owning the bubbles (DESIGN §3: the library never sees "N
 // entities"). Bubbles are pre-partitioned by color into SoA groups so each frame
-// is: tight typed-array update + one ctx.fillCircles per color (no bucketing).
+// is: tight typed-array update + one ctx.fillInstances per color (no bucketing).
 class BubbleSystem {
   groups: ColorGroup[] = Array.from(
     { length: N_COLORS },
     () => new ColorGroup()
   );
+
+  // Unit-circle template (radius 1 at origin), stamped per bubble via the
+  // per-instance scale. Lazily built — the native Path2D global exists only
+  // after the canvas module installs.
+  circle?: Path2D;
 
   get total() {
     let t = 0;
@@ -155,14 +166,21 @@ class BubbleSystem {
     }
   }
 
-  // One ctx.fillCircles per color group → N_COLORS JSI calls total, regardless
-  // of bubble count. The Float32Arrays are passed straight through (no copy).
+  // One ctx.fillInstances per color group → N_COLORS JSI calls total, regardless
+  // of bubble count. The unit-circle template is stamped per bubble (scale = rs);
+  // the Float32Arrays are passed straight through (no copy).
   draw(ctx: Ctx) {
+    let circle = this.circle;
+    if (!circle) {
+      circle = new Path2D();
+      circle.arc(0, 0, 1, 0, Math.PI * 2);
+      this.circle = circle;
+    }
     for (let ci = 0; ci < N_COLORS; ci++) {
       const g = this.groups[ci]!;
       if (g.count === 0) continue;
       ctx.fillStyle = COLORS[ci]!;
-      ctx.fillCircles(g.xs, g.ys, g.rs, g.count);
+      ctx.fillInstances(circle, g.data, g.count);
     }
   }
 }
@@ -221,7 +239,7 @@ export default function App() {
 
     // [PERF INSTRUMENTATION — temporary] background first (untimed), then time
     // the two frame regions: update (K2, SoA typed-array sim) · draw (K3, the
-    // ctx.fillCircles JSI calls). Bucketing is gone (data pre-partitioned).
+    // ctx.fillInstances JSI calls). Bucketing is gone (data pre-partitioned).
     ctx.fillStyle = '#11131a';
     ctx.fillRect(0, 0, width, height);
 

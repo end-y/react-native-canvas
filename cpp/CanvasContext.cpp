@@ -13,8 +13,6 @@ using namespace facebook;
 
 namespace {
 
-constexpr float kTwoPiF = 6.28318530717958647692f;
-
 // Reads args[i] as a double, or `def` if missing / not a number.
 double num(const jsi::Value* args, size_t count, size_t i, double def = 0.0) {
   return (i < count && args[i].isNumber()) ? args[i].asNumber() : def;
@@ -199,73 +197,16 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   }
 
   // Instanced fast path (non-standard) --------------------------------------
-  // fillCircles(xs, ys, rs, count): emits one path of `count` circles + a fill
-  // using the current fillStyle — the exact commands beginPath + N*arc + fill
-  // would, but built in a C++ loop from SoA Float32Arrays. Collapses N JSI
-  // round-trips into 1 (DESIGN §8). Render output is byte-identical.
-  if (name == "fillCircles") {
-    return method(4, [this](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
-      if (n < 4) return jsi::Value::undefined();
-      size_t lx, ly, lr;
-      const float* xs = asFloat32(rt, a[0], lx);
-      const float* ys = asFloat32(rt, a[1], ly);
-      const float* rs = asFloat32(rt, a[2], lr);
-      if (!xs || !ys || !rs) return jsi::Value::undefined();
-      size_t count = (size_t)num(a, n, 3);
-      count = std::min(count, std::min(lx, std::min(ly, lr)));
-      if (count == 0) return jsi::Value::undefined();
-
-      const uint32_t col = withAlpha(fillColor_);
-      commands_.reserve(commands_.size() + count + 2);
-      commands_.push_back(Command{Op::BeginPath});
-      Command c{Op::Arc};
-      c.a0 = 0.0f; c.a1 = kTwoPiF; c.ccw = false;  // full circle -> addCircle
-      for (size_t i = 0; i < count; ++i) {
-        c.x = xs[i]; c.y = ys[i]; c.w = rs[i];
-        commands_.push_back(c);
-      }
-      Command f{Op::Fill}; f.color = col;
-      commands_.push_back(f);
-      return jsi::Value::undefined();
-    });
-  }
-
-  // fillRects(xs, ys, ws, hs, count): instanced filled rects — one path of
-  // `count` rects + a fill, built in C++ from SoA Float32Arrays. Sugar twin of
-  // fillCircles; one JSI call regardless of count.
-  if (name == "fillRects") {
-    return method(5, [this](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
-      if (n < 5) return jsi::Value::undefined();
-      size_t lx, ly, lw, lh;
-      const float* xs = asFloat32(rt, a[0], lx);
-      const float* ys = asFloat32(rt, a[1], ly);
-      const float* ws = asFloat32(rt, a[2], lw);
-      const float* hs = asFloat32(rt, a[3], lh);
-      if (!xs || !ys || !ws || !hs) return jsi::Value::undefined();
-      size_t count = (size_t)num(a, n, 4);
-      count = std::min(count, std::min(std::min(lx, ly), std::min(lw, lh)));
-      if (count == 0) return jsi::Value::undefined();
-
-      const uint32_t col = withAlpha(fillColor_);
-      commands_.reserve(commands_.size() + count + 2);
-      commands_.push_back(Command{Op::BeginPath});
-      Command c{Op::RectPath};
-      for (size_t i = 0; i < count; ++i) {
-        c.x = xs[i]; c.y = ys[i]; c.w = ws[i]; c.h = hs[i];
-        commands_.push_back(c);
-      }
-      Command f{Op::Fill}; f.color = col;
-      commands_.push_back(f);
-      return jsi::Value::undefined();
-    });
-  }
-
-  // fillInstances(template, data, count): the general instancing primitive
-  // (non-standard). `template` is a Path2D; `data` is SoA per-instance transform
-  // { x, y, scale?|scaleX?/scaleY?, rotation? } as numbers or Float32Arrays.
-  // Stamps the template `count` times under each transform, filled with the
-  // current fillStyle — any shape, one JSI call. Emits, per instance,
-  // save/translate/[rotate]/scale + the template path + fill + restore.
+  // fillInstances(template, data, count): the single instancing primitive.
+  // `template` is a Path2D (a circle/rect is just a Path2D — no special-casing);
+  // `data` is SoA per-instance transform { x, y, scale?|scaleX?/scaleY?,
+  // rotation? } as numbers or Float32Arrays. Stamps the template `count` times,
+  // each under a per-instance affine, into ONE path filled once with the current
+  // fillStyle — collapsing N JSI round-trips into 1 AND N fills into 1
+  // (DESIGN §8). Per instance we emit a PathMatrix (translate*rotate*scale) then
+  // the template's path-building commands; the renderer bakes them into the same
+  // path. For a uniform-scale circle this lowers to a single addCircle/fill, so
+  // it matches a hand-written beginPath + N*arc + fill exactly.
   if (name == "fillInstances") {
     return method(3, [this](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
       if (n < 3 || !a[0].isObject() || !a[1].isObject()) return jsi::Value::undefined();
@@ -293,18 +234,28 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       const FloatSrc rot = readFloat(rt, data, "rotation");
 
       const uint32_t col = withAlpha(fillColor_);
-      const size_t per = tcmds.size() + 6;
-      commands_.reserve(commands_.size() + count * per);
+      // BeginPath + count*(PathMatrix + template) + Fill.
+      commands_.reserve(commands_.size() + 2 + count * (1 + tcmds.size()));
+      commands_.push_back(Command{Op::BeginPath});
       for (size_t i = 0; i < count; ++i) {
-        commands_.push_back(Command{Op::Save});
-        { Command c{Op::Translate}; c.x = xs[i]; c.y = ys[i]; commands_.push_back(c); }
-        if (rot.valid) { Command c{Op::Rotate}; c.a0 = rot.at(i); commands_.push_back(c); }
-        { Command c{Op::Scale}; c.x = sx.at(i); c.y = sy.at(i); commands_.push_back(c); }
-        commands_.push_back(Command{Op::BeginPath});
+        // M = Translate(x,y) * Rotate(rot) * Scale(sx,sy), packed as the 2x3
+        // affine [a c e; b d f] (x=a, y=b, w=c, h=d, a0=e, a1=f).
+        const float c0 = rot.valid ? std::cos(rot.at(i)) : 1.0f;
+        const float s0 = rot.valid ? std::sin(rot.at(i)) : 0.0f;
+        const float SX = sx.at(i);
+        const float SY = sy.at(i);
+        Command m{Op::PathMatrix};
+        m.x = c0 * SX;   // a
+        m.y = s0 * SX;   // b
+        m.w = -s0 * SY;  // c
+        m.h = c0 * SY;   // d
+        m.a0 = xs[i];    // e
+        m.a1 = ys[i];    // f
+        commands_.push_back(m);
         for (const Command& tc : tcmds) commands_.push_back(tc);
-        { Command f{Op::Fill}; f.color = col; commands_.push_back(f); }
-        commands_.push_back(Command{Op::Restore});
       }
+      Command f{Op::Fill}; f.color = col;
+      commands_.push_back(f);
       return jsi::Value::undefined();
     });
   }
@@ -402,7 +353,7 @@ std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
       "fillStyle", "strokeStyle", "lineWidth", "globalAlpha",
       "clearRect", "fillRect", "strokeRect",
       "beginPath", "closePath", "moveTo", "lineTo", "arc", "rect",
-      "fill", "stroke", "fillCircles", "fillRects", "fillInstances",
+      "fill", "stroke", "fillInstances",
       "save", "restore", "translate", "scale", "rotate",
       "present",
   };

@@ -32,6 +32,11 @@ enum class Op : uint8_t {
   Translate,
   Scale,
   Rotate,
+  // Path-space transform: applied by the renderer to subsequent path-building
+  // commands (MoveTo/LineTo/Arc/RectPath) as they are appended to the *current*
+  // path — not to the canvas. Lets fillInstances stamp a template under N
+  // transforms into ONE path + ONE fill. Reset to identity on BeginPath.
+  PathMatrix,
 };
 
 // One drawing command. Fields are interpreted per-op (documented inline). Kept
@@ -41,6 +46,8 @@ struct Command {
 
   // Geometry. Rects: (x,y,w,h). MoveTo/LineTo/Translate/Scale: (x,y).
   // Arc: center (x,y), radius w, angles a0..a1 (radians), ccw. Rotate: a0 (rad).
+  // PathMatrix: a 2x3 affine [a c e; b d f] packed as x=a, y=b, w=c, h=d,
+  //   a0=e, a1=f (column-major-ish: maps (px,py) -> (a*px+c*py+e, b*px+d*py+f)).
   float x = 0, y = 0, w = 0, h = 0;
   float a0 = 0, a1 = 0;
 

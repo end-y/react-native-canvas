@@ -31,30 +31,14 @@ export interface Ctx {
   stroke(): void;
 
   // --- Non-standard instancing fast path (experimental react-native-canvas
-  // extension; NOT part of CanvasRenderingContext2D). Each call draws `count`
-  // primitives in ONE JSI round-trip from SoA Float32Arrays, using the current
-  // fillStyle/globalAlpha — for thousands of moving primitives (DESIGN §8). ---
-
-  // Filled circles: centers xs/ys, per-instance radius rs (length >= count).
-  fillCircles(
-    xs: Float32Array,
-    ys: Float32Array,
-    rs: Float32Array,
-    count: number
-  ): void;
-
-  // Filled rects: top-left xs/ys, size ws/hs (length >= count).
-  fillRects(
-    xs: Float32Array,
-    ys: Float32Array,
-    ws: Float32Array,
-    hs: Float32Array,
-    count: number
-  ): void;
-
-  // General instancing: stamps a Path2D `template` `count` times under the
-  // per-instance transforms in `data`. Any shape — circles/rects have dedicated
-  // fast methods above; everything else goes through here with a Path2D.
+  // extension; NOT part of CanvasRenderingContext2D). ---
+  //
+  // Stamps a Path2D `template` `count` times under the per-instance transforms
+  // in `data`, into ONE filled path using the current fillStyle/globalAlpha.
+  // Collapses N JSI round-trips AND N fills into 1 — for thousands of moving
+  // primitives (DESIGN §8). A circle/rect is just a Path2D template; there is no
+  // special-casing. For a uniform-scale circle this lowers to a single
+  // addCircle + fill (byte-identical to a hand-written beginPath/arc/fill loop).
   fillInstances(template: Path2D, data: InstanceData, count: number): void;
 
   // State & transform
