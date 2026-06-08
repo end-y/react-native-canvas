@@ -7,6 +7,7 @@
 #include "CanvasContext.h"
 #include "CanvasRegistry.h"
 #include "FrameLoop.h"
+#include "Path2D.h"
 
 namespace rncanvas {
 
@@ -35,6 +36,9 @@ void installCanvasApi(jsi::Runtime& rt) {
 
   // Frame loop API: __rncanvasStartLoop / __rncanvasStopLoop.
   installFrameLoopApi(rt);
+
+  // Global Path2D constructor (template geometry for ctx.fillInstances).
+  installPath2D(rt);
 }
 
 }  // namespace rncanvas

@@ -14,31 +14,76 @@ const N_COLORS = COLORS.length;
 // Spawn at most this many bubbles per frame so load buttons stay responsive.
 const FILL_CHUNK = 1000;
 
-class Bubble {
-  constructor(
-    public x: number,
-    public y: number,
-    public r: number,
-    public vx: number,
-    public vy: number,
-    public ci: number // color index into COLORS — integer, avoids string hashing
-  ) {}
+// Max bubbles per color group (SoA capacity). Worst case all bubbles share one
+// color, so size for the full load.
+const GROUP_CAP = 16000;
+
+// Structure-of-Arrays storage for one color's bubbles. Positions/radii live in
+// Float32Arrays so update() is a tight typed-array loop and draw() can hand the
+// arrays straight to ctx.fillCircles (one JSI call, no per-frame copy).
+class ColorGroup {
+  xs = new Float32Array(GROUP_CAP);
+  ys = new Float32Array(GROUP_CAP);
+  rs = new Float32Array(GROUP_CAP);
+  vxs = new Float32Array(GROUP_CAP);
+  vys = new Float32Array(GROUP_CAP);
+  count = 0;
+
+  add(x: number, y: number, r: number, vx: number, vy: number) {
+    const i = this.count;
+    if (i >= GROUP_CAP) return;
+    this.xs[i] = x;
+    this.ys[i] = y;
+    this.rs[i] = r;
+    this.vxs[i] = vx;
+    this.vys[i] = vy;
+    this.count = i + 1;
+  }
+
+  // Swap-remove (order irrelevant for bubbles).
+  removeAt(i: number) {
+    const last = this.count - 1;
+    if (i !== last) {
+      this.xs[i] = this.xs[last]!;
+      this.ys[i] = this.ys[last]!;
+      this.rs[i] = this.rs[last]!;
+      this.vxs[i] = this.vxs[last]!;
+      this.vys[i] = this.vys[last]!;
+    }
+    this.count = last;
+  }
 }
 
-// A single entity owning an array of bubbles (DESIGN §3: the library never sees
-// "N entities" — dynamic add/remove is the entity's own job).
+// A single entity owning the bubbles (DESIGN §3: the library never sees "N
+// entities"). Bubbles are pre-partitioned by color into SoA groups so each frame
+// is: tight typed-array update + one ctx.fillCircles per color (no bucketing).
 class BubbleSystem {
-  items: Bubble[] = [];
-  // Pre-allocated per-color bucket arrays — reused every frame (zero allocation).
-  private buckets: Bubble[][] = Array.from({ length: N_COLORS }, () => []);
+  groups: ColorGroup[] = Array.from(
+    { length: N_COLORS },
+    () => new ColorGroup()
+  );
+
+  get total() {
+    let t = 0;
+    for (let ci = 0; ci < N_COLORS; ci++) t += this.groups[ci]!.count;
+    return t;
+  }
+
+  clear() {
+    for (let ci = 0; ci < N_COLORS; ci++) this.groups[ci]!.count = 0;
+  }
 
   spawn(x: number, y: number) {
     const r = 18 + Math.random() * 16;
     const angle = Math.random() * Math.PI * 2;
     const speed = 80 + Math.random() * 120;
     const ci = Math.floor(Math.random() * N_COLORS);
-    this.items.push(
-      new Bubble(x, y, r, Math.cos(angle) * speed, Math.sin(angle) * speed, ci)
+    this.groups[ci]!.add(
+      x,
+      y,
+      r,
+      Math.cos(angle) * speed,
+      Math.sin(angle) * speed
     );
   }
 
@@ -49,82 +94,86 @@ class BubbleSystem {
       const r = 6 + Math.random() * 10;
       const angle = Math.random() * Math.PI * 2;
       const speed = 60 + Math.random() * 120;
-      const ci = i % N_COLORS;
-      this.items.push(
-        new Bubble(
-          r + Math.random() * (w - 2 * r),
-          r + Math.random() * (h - 2 * r),
-          r,
-          Math.cos(angle) * speed,
-          Math.sin(angle) * speed,
-          ci
-        )
+      const ci = i % N_COLORS; // even color distribution
+      this.groups[ci]!.add(
+        r + Math.random() * (w - 2 * r),
+        r + Math.random() * (h - 2 * r),
+        r,
+        Math.cos(angle) * speed,
+        Math.sin(angle) * speed
       );
     }
   }
 
   // Returns true if a bubble was popped at (x, y) — hit-testing is user code.
   popAt(x: number, y: number): boolean {
-    for (let i = 0; i < this.items.length; i++) {
-      const b = this.items[i]!;
-      if (Math.hypot(x - b.x, y - b.y) <= b.r) {
-        this.items.splice(i, 1);
-        return true;
+    for (let ci = 0; ci < N_COLORS; ci++) {
+      const g = this.groups[ci]!;
+      for (let i = 0; i < g.count; i++) {
+        const dx = x - g.xs[i]!;
+        const dy = y - g.ys[i]!;
+        const r = g.rs[i]!;
+        if (dx * dx + dy * dy <= r * r) {
+          g.removeAt(i);
+          return true;
+        }
       }
     }
     return false;
   }
 
   update(dt: number, w: number, h: number) {
-    for (let i = 0; i < this.items.length; i++) {
-      const b = this.items[i]!;
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      if (b.x < b.r) {
-        b.x = b.r;
-        b.vx = Math.abs(b.vx);
-      } else if (b.x > w - b.r) {
-        b.x = w - b.r;
-        b.vx = -Math.abs(b.vx);
-      }
-      if (b.y < b.r) {
-        b.y = b.r;
-        b.vy = Math.abs(b.vy);
-      } else if (b.y > h - b.r) {
-        b.y = h - b.r;
-        b.vy = -Math.abs(b.vy);
+    for (let ci = 0; ci < N_COLORS; ci++) {
+      const g = this.groups[ci]!;
+      const xs = g.xs;
+      const ys = g.ys;
+      const rs = g.rs;
+      const vxs = g.vxs;
+      const vys = g.vys;
+      const cnt = g.count;
+      for (let i = 0; i < cnt; i++) {
+        const r = rs[i]!;
+        let x = xs[i]! + vxs[i]! * dt;
+        let y = ys[i]! + vys[i]! * dt;
+        if (x < r) {
+          x = r;
+          vxs[i] = Math.abs(vxs[i]!);
+        } else if (x > w - r) {
+          x = w - r;
+          vxs[i] = -Math.abs(vxs[i]!);
+        }
+        if (y < r) {
+          y = r;
+          vys[i] = Math.abs(vys[i]!);
+        } else if (y > h - r) {
+          y = h - r;
+          vys[i] = -Math.abs(vys[i]!);
+        }
+        xs[i] = x;
+        ys[i] = y;
       }
     }
   }
 
+  // One ctx.fillCircles per color group → N_COLORS JSI calls total, regardless
+  // of bubble count. The Float32Arrays are passed straight through (no copy).
   draw(ctx: Ctx) {
-    if (this.items.length === 0) return;
-
-    // Clear pre-allocated buckets (length = 0, no GC).
-    for (let ci = 0; ci < N_COLORS; ci++) this.buckets[ci]!.length = 0;
-
-    // Sort bubbles into color buckets — integer index, no string hashing, no alloc.
-    for (let i = 0; i < this.items.length; i++) {
-      const b = this.items[i]!;
-      this.buckets[b.ci]!.push(b);
-    }
-
-    // One beginPath + fill per color → ~N_COLORS JSI round-trips instead of 4×N.
     for (let ci = 0; ci < N_COLORS; ci++) {
-      const bucket = this.buckets[ci]!;
-      if (bucket.length === 0) continue;
+      const g = this.groups[ci]!;
+      if (g.count === 0) continue;
       ctx.fillStyle = COLORS[ci]!;
-      ctx.beginPath();
-      for (let j = 0; j < bucket.length; j++) {
-        const b = bucket[j]!;
-        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      }
-      ctx.fill();
+      ctx.fillCircles(g.xs, g.ys, g.rs, g.count);
     }
   }
 }
 
-const LOADS = [0, 1000, 3000, 8000];
+// [PERF INSTRUMENTATION — temporary] high-res timer for sub-frame region timing.
+const _perf = (globalThis as { performance?: { now?: () => number } })
+  .performance;
+const perfNow: () => number =
+  typeof _perf?.now === 'function' ? () => _perf.now!() : () => Date.now();
+
+const LOADS = [0, 1000, 3000, 8000, 15000];
 
 export default function App() {
   const ref = useCanvasRef();
@@ -133,6 +182,9 @@ export default function App() {
   // FPS via wall clock (Date.now). Counts how many draw callbacks fire per real
   // second — a stalled JS or render thread both show up as lower fps here.
   const fpsState = useRef({ frames: 0, last: Date.now(), value: 0 });
+  // [PERF INSTRUMENTATION — temporary] per-region time accumulators (ms summed
+  // across the frames in a 1s window; divided by sample count when logged).
+  const perf = useRef({ tUpdate: 0, tDrawJsi: 0, samples: 0 });
   const [fps, setFps] = useState(0);
   const [load, setLoad] = useState(0);
   const [filling, setFilling] = useState(false);
@@ -142,7 +194,7 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(() => {
       setFps(fpsState.current.value);
-      setBubbleCount(bubbles.items.length);
+      setBubbleCount(bubbles.total);
       // Chunked fill finished — re-enable load buttons (avoid setState in draw loop).
       if (pendingLoad.current === null) {
         setFilling(false);
@@ -155,7 +207,7 @@ export default function App() {
     const pending = pendingLoad.current;
     if (pending) {
       if (pending.spawned === 0 && pending.target === 0) {
-        bubbles.items = [];
+        bubbles.clear();
         pendingLoad.current = null;
       } else if (pending.spawned < pending.target) {
         const chunk = Math.min(FILL_CHUNK, pending.target - pending.spawned);
@@ -167,20 +219,41 @@ export default function App() {
       }
     }
 
+    // [PERF INSTRUMENTATION — temporary] background first (untimed), then time
+    // the two frame regions: update (K2, SoA typed-array sim) · draw (K3, the
+    // ctx.fillCircles JSI calls). Bucketing is gone (data pre-partitioned).
+    ctx.fillStyle = '#11131a';
+    ctx.fillRect(0, 0, width, height);
+
+    const P = perf.current;
+    const a0 = perfNow();
+    bubbles.update(dt, width, height);
+    const a1 = perfNow();
+    bubbles.draw(ctx);
+    const a2 = perfNow();
+    P.tUpdate += a1 - a0;
+    P.tDrawJsi += a2 - a1;
+    P.samples++;
+
     const s = fpsState.current;
     s.frames++;
     const now = Date.now();
     const elapsed = (now - s.last) / 1000; // ms → seconds
     if (elapsed >= 1) {
       s.value = Math.round(s.frames / elapsed);
+      const k = P.samples || 1;
+      console.log(
+        `PERF n=${bubbles.total} fps=${s.value} ` +
+          `update=${(P.tUpdate / k).toFixed(2)} ` +
+          `drawJSI=${(P.tDrawJsi / k).toFixed(2)} ` +
+          `total=${((P.tUpdate + P.tDrawJsi) / k).toFixed(2)}ms`
+      );
+      P.tUpdate = 0;
+      P.tDrawJsi = 0;
+      P.samples = 0;
       s.frames = 0;
       s.last = now;
     }
-
-    bubbles.update(dt, width, height);
-    ctx.fillStyle = '#11131a';
-    ctx.fillRect(0, 0, width, height);
-    bubbles.draw(ctx);
   });
 
   return (
@@ -205,7 +278,7 @@ export default function App() {
               onPress={() => {
                 setLoad(n);
                 setBubbleCount(0);
-                bubbles.items = [];
+                bubbles.clear();
                 pendingLoad.current = { target: n, spawned: 0 };
                 setFilling(n > 0);
                 if (n === 0) setFilling(false);

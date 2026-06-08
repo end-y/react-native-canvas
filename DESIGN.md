@@ -163,6 +163,18 @@ onPress={(e) => {
 ### Frame'ler arası state
 Web ile aynı: `ctx` state'i (fillStyle, transform...) **frame'ler arası korunur**; reset kullanıcının sorumluluğu (`save`/`restore`). **İstisna:** DPR scale'i her frame başında içeride uygulanır.
 
+### Non-standard instancing API (deneysel — web Canvas 2D'nin parçası değil)
+Binlerce moving primitive için JSI round-trip sayısını sabit tutmak amacıyla eklendi. Her biri **tek JSI çağrısıyla** N nesne çizer; mevcut `arc`/`fill` yoluyla byte-identical çıktı üretir.
+
+- `fillCircles(xs, ys, rs, count)` — SoA Float32Array'den N dolu daire; `beginPath + N×arc + fill` eşdeğeri.
+- `fillRects(xs, ys, ws, hs, count)` — SoA Float32Array'den N dolu dikdörtgen.
+- `fillInstances(template: Path2D, data: InstanceData, count)` — herhangi bir `Path2D` şablonunu N kez farklı konuma/ölçeğe/dönüşüme damgalar.
+- `Path2D` — `new Path2D()` ile oluşturulan yeniden kullanılabilir yol şablonu (`moveTo`, `lineTo`, `arc`, `rect`, `closePath`). Global constructor natively kurulu (C++ `installPath2D`).
+
+`InstanceData` = `{ x, y, scale?|scaleX?/scaleY?, rotation? }` — sabit sayı veya per-instance Float32Array.
+
+> **Hermes tuzağı:** Host function'lar Hermes'te `new` ile kullanılamaz. Çözüm: `__rncanvasCreatePath` C++ factory + `global.Path2D = function Path2D(){ return factory(); }` JS wrapper — `new Path2D()` her iki çalışma zamanında da çalışır.
+
 ### Stretch (zaman kalırsa 0.1'e girer, Skia'da kolay)
 `quadraticCurveTo`, `bezierCurveTo`, `arcTo`, `ellipse`, `lineCap`, `lineJoin`, `miterLimit`, `setTransform`/`transform`/`resetTransform`, `clip()`
 
@@ -271,8 +283,9 @@ FrameTick(dt)  ──►  C++ loop
 - Darboğaz **frame başına kaç şekil** değil, **frame başına ne kadar JS** çalıştığıdır.
 - 60fps = frame başına **16.6ms** bütçe.
 - ~400-500 hareketli bubble: rahat (düz JS loop). JSI çağrısı maliyeti ihmal edilebilir.
-- Binlerce nesnede kaçış planı (v2, sıralı): **(1)** komut batch'leme → **(2)** instancing (`drawAtlas` benzeri) → **(3)** simülasyonu C++'a taşıma.
-- 0.1'de bu optimizasyonların hiçbiri yok; yalnızca API bunlara izin verecek şekilde tasarlanır.
+- Binlerce nesnede kaçış planı (sıralı): **(1)** komut batch'leme → **(2)** instancing (`drawAtlas` benzeri) → **(3)** simülasyonu C++'a taşıma.
+- **Katman 1 (instancing) uygulandı:** `fillCircles`/`fillRects`/`fillInstances` + `Path2D` ile N nesne 1 JSI çağrısına indirgendi. Ölçüm: 15k bubble **34 → 60fps**, drawJSI **24× azaldı**. K2 (JS simülasyon) ~50%, K3 (JSI draw) ~50% oranında iyileşti.
+- Sonraki kaçış noktası: K2'yi de C++'a taşıma (simülasyon loop'u native) — v2 için rafta.
 
 ---
 
@@ -325,7 +338,9 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 >
 > **Adım 6 (TAMAMLANDI):** ✅ **GPU/Ganesh backend iki platformda da DOĞRULANDI.** Android: GL, 3000 baloncuk **21fps → 60fps (5x)**. iOS: **Metal (CAMetalLayer + Ganesh)**, gerçek iPhone 13'te doğrulandı; render **ayrı render thread'e** alındı (Android'le simetrik `MetalCanvasSurface`), main thread vsync/UI için serbest. JS API hiç değişmedi. Ek olarak **ctx method host-function'ları cache'lendi** (Hermes HostObject tuzağı: her `ctx.arc` yeniden fonksiyon allocate ediyordu → frame başına ~N alloc; iki platforma da yarar). Bkz. §13 "Adım 6".
 >
-> **SIRADAKI:** Paketleme/cila: `bob build`, README, npm publish. Stretch ctx op'ları (§4: `quadraticCurveTo`, `bezierCurveTo`, `ellipse`, `lineCap/Join`, `clip`, `setTransform`) ve perf v2 (instancing/drawAtlas, command-list kopyasını azaltma) zaman kalırsa.
+> **Adım 8 (TAMAMLANDI):** ✅ **Katman 1 instancing API DOĞRULANDI.** `fillCircles`/`fillRects`/`fillInstances` + `Path2D` eklendi. 15k bubble: **34 → 60fps**, drawJSI **24×** azaldı. BubbleSystem SoA (Float32Array) + renk başına ColorGroup mimarisine geçirildi. FrameLoop robustluğu doğrulandı (throw eden draw callback loop'u öldürmüyor). iOS derleme: `BUILD SUCCEEDED` (iPhone 16 RNC sim). Bkz. §13 "Adım 8".
+>
+> **SIRADAKI:** Paketleme/cila: `bob build`, README, npm publish. Stretch ctx op'ları (§4: `quadraticCurveTo`, `bezierCurveTo`, `ellipse`, `lineCap/Join`, `clip`, `setTransform`) ve perf v2 (K2 simülasyonu C++'a taşıma) zaman kalırsa.
 
 0. ✅ **İskelet + baseline:** `create-react-native-library` (fabric-view, kotlin-objc) ile `<CanvasView>` kuruldu; Android (Pixel 4 / API 34) ve iOS (iPhone 16 / iOS 26.5) üzerinde çalışan boş view doğrulandı.
 1. **Skia binary'lerini linkle** (Android + iOS) — ilk ve en kritik engel.
@@ -335,6 +350,7 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 5. ✅ **`useEntity` + `params` köprüsü + `onPress`.** **DOĞRULANDI** (Android deterministik; iOS render+framer).
 6. ✅ **GPU backend'e geçiş:** CPU raster yerine Ganesh (JS API hiç değişmez). **Android (GL) + iOS (Metal) DOĞRULANDI**; render ayrı thread'de (her iki platform).
 7. ✅ **İki platformu da tamamla** (paylaşılan çekirdek aynı, sadece shim'ler) — Android + iOS GPU + decoupled render thread.
+8. ✅ **Katman 1 instancing:** `fillCircles`/`fillRects`/`fillInstances` + `Path2D` (deneysel non-standard extension, §4). SoA + ColorGroup BubbleSystem, perf harness. 15k → 60fps, iOS BUILD SUCCEEDED.
 
 ---
 
@@ -518,6 +534,34 @@ CPU raster (her frame `SkBitmap` → `CGImage` → `layer.contents`) → **GPU r
 2. **`SkColorSpace` incomplete type:** `SkSurface.h` yalnızca forward-declare eder; `WrapBackendRenderTarget` tam tanım ister → `#include "include/core/SkColorSpace.h"` (Android'de de aynı).
 3. **ctx host-function cache:** Hermes HostObject property get'lerini cache'lemediğinden her `ctx.arc` yeni fonksiyon allocate ediyordu (frame başına ~N). `CanvasContext` artık method fonksiyonlarını isimle cache'liyor — JS thread'inde per-call alloc sıfırlandı (iki platforma da yarar).
 4. **Önce ölç:** Simulator (Apple Silicon GPU) darboğazı gizliyordu (8000'de bile 60fps); gerçek cihazda asıl kısıtlar (frame başına JS/JSI çağrısı, command-list kopyası) görünür. Örnek app perf harness'a çevrildi (FPS + 1k/3k/8k yük + chunked fill + renk-bucket batch draw).
+
+### Adım 8 — Katman 1 instancing (fillCircles / fillRects / fillInstances + Path2D) DOĞRULANDI ✅
+"frame başına JSI çağrısı" darboğazı ölçülerek ayrıştırıldı (K2 JS simülasyon ~50%, K3 JSI draw ~50%) ve C++ instancing ile K3 çözüldü.
+
+**Ölçüm sonuçları:**
+- `fillCircles` PoC: 15k bubble **34 → 60fps**, `drawJSI` **24× azaldı** (5 renk → 5 JSI/frame, bubble sayısından bağımsız).
+- 3k/8k/15k yük altında cihazda 60fps sabit (K3 artık sıfıra yakın, bütçenin tamamı K2'ye).
+
+**Yeni C++ çekirdek:**
+- `cpp/Path2D.{h,cpp}` — `Path2DHost` JSI HostObject: path-building komutları (MoveTo/LineTo/Arc/RectPath/Close) biriktirir. Method cache (Hermes alloc tuzağı). `installPath2D`: Hermes `new` workaround — native factory + JS constructable wrapper → `global.Path2D`.
+- `cpp/CanvasContext.cpp` — `fillCircles`, `fillRects`, `fillInstances` eklendi. Yardımcılar: `asFloat32` (zero-copy ArrayBuffer view, pointer host call süresince geçerli), `FloatSrc`/`readFloat` (sabit veya per-instance float).
+- `cpp/CanvasInstaller.cpp` — kurulum sırası: `installFrameLoopApi` → `installPath2D` (önceki yanlış sıra loop'u hiç başlatmıyordu; düzeltildi).
+
+**JS/TS:**
+- `src/types.ts`: `fillCircles`/`fillRects`/`fillInstances`, `Path2D`, `InstanceData`, `declare global { var Path2D }`.
+- `src/index.tsx`: yeni tipler export edildi.
+- `example/src/App.tsx`: `BubbleSystem` → renk başına SoA `ColorGroup` (Float32Array); draw: renk başına 1× `fillCircles` (5 JSI/frame); geçici PERF instrumentation (update/drawJSI/total ms, 15k yük butonu).
+
+**Platform build:**
+- `android/CMakeLists.txt`: `Path2D.cpp` eklendi.
+- iOS: podspec glob (`cpp/*.{h,cpp}`) otomatik alıyor — değişiklik gerekmedi.
+- **iOS BUILD SUCCEEDED** (iPhone 16 RNC sim, `pod install` + `xcodebuild`).
+
+**Kritik öğrenmeler:**
+1. **Hermes `new` tuzağı:** `jsi::Function::createFromHostFunction` ile oluşturulan fonksiyonlar Hermes'te constructor olarak kullanılamaz ("not a constructor"). Çözüm: C++ factory ayrı, JS wrapper (`function Path2D(){ return factory(); }`) ayrı — `new Path2D()` wrapper'ı çağırır, factory native objeyi döner, construct result bu obje olur.
+2. **FrameLoop robustluğu:** Throw eden draw callback (her frame `throw`) 6 saniye / 60fps boyunca loop'u öldürmedi — `FrameLoop.cpp:49-54` try/catch doğru çalışıyor.
+3. **Yanlış teşhis düzeltmesi:** "Loop öldü" gözlemi aslında `installPath2D`'nin `installFrameLoopApi`'den önce çağrılmasından kaynaklanıyordu. Kurulum sırası düzeltildi.
+4. **Zero-copy ArrayBuffer:** `asFloat32` byteOffset + length'i JS'ten okuyup ArrayBuffer'a pointer döner — frame boyunca geçerli, kopyasız. Typed array'ler `data` objesi üzerinden reachable kaldığı sürece GC tarafından taşınmaz.
 
 ### Çalıştırma komutları (referans)
 ```bash
