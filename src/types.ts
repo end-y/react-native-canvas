@@ -40,6 +40,12 @@ export interface Ctx {
   lineJoin: 'miter' | 'round' | 'bevel';
   miterLimit: number;
   globalCompositeOperation: GlobalCompositeOperation;
+  // Shadows apply to fill/stroke draws when shadowColor is visible and
+  // blur or offset is non-zero (web defaults: transparent, 0, 0, 0).
+  shadowColor: string;
+  shadowBlur: number;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
 
   // Rects
   clearRect(x: number, y: number, w: number, h: number): void;

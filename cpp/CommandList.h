@@ -111,6 +111,12 @@ struct Command {
   uint8_t blend = 0;               // Paint ops (BlendOp; 0 = source-over).
   bool ccw = false;                // Arc / Ellipse only.
   bool evenOdd = false;            // Fill / Clip fill-rule.
+
+  // Shadow snapshot (paint ops). Inactive when shadowColor's alpha is 0 —
+  // the ctx only fills these in when the shadow would actually be visible.
+  uint32_t shadowColor = 0;        // ARGB, globalAlpha folded in.
+  float shadowBlur = 0.0f;         // Web shadowBlur (≈ 2x the Gaussian sigma).
+  float shadowDx = 0.0f, shadowDy = 0.0f;
 };
 
 using CommandList = std::vector<Command>;

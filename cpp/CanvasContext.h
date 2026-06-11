@@ -41,6 +41,10 @@ class CanvasContext : public facebook::jsi::HostObject {
   // Folds the current globalAlpha into a color's alpha channel (ARGB).
   uint32_t withAlpha(uint32_t color) const;
 
+  // Copies the shadow state into a paint command, but only when the shadow
+  // would be visible (color alpha > 0 AND blur or offset non-zero).
+  void snapshotShadow(Command& c) const;
+
   FlushFn flush_;
   CommandList commands_;
 
@@ -61,6 +65,13 @@ class CanvasContext : public facebook::jsi::HostObject {
   LineJoin lineJoin_ = LineJoin::Miter;
   float miterLimit_ = 10.0f;
   BlendOp blend_ = BlendOp::SourceOver;
+
+  // Shadow state (web defaults: transparent black, no blur, no offset).
+  uint32_t shadowColor_ = 0x00000000;
+  std::string shadowColorStr_ = "rgba(0, 0, 0, 0)";
+  float shadowBlur_ = 0.0f;
+  float shadowOffsetX_ = 0.0f;
+  float shadowOffsetY_ = 0.0f;
 };
 
 }  // namespace rncanvas

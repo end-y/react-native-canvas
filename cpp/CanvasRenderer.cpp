@@ -14,6 +14,7 @@
 #include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
 #include "include/core/SkScalar.h"
+#include "include/effects/SkImageFilters.h"
 
 namespace rncanvas {
 
@@ -57,6 +58,16 @@ SkBlendMode toSkBlend(uint8_t b) {
     case BlendOp::Luminosity: return SkBlendMode::kLuminosity;
   }
   return SkBlendMode::kSrcOver;
+}
+
+// Attaches the command's shadow (if active) as a DropShadow image filter.
+// Canvas shadowBlur maps to a Gaussian sigma of blur/2 (Chromium's mapping).
+void applyShadow(SkPaint& p, const Command& c) {
+  if ((c.shadowColor >> 24) == 0) return;
+  const SkScalar sigma = c.shadowBlur * 0.5f;
+  p.setImageFilter(SkImageFilters::DropShadow(c.shadowDx, c.shadowDy, sigma,
+                                              sigma, (SkColor)c.shadowColor,
+                                              /*input=*/nullptr));
 }
 
 // Web semantics for these modes affect the WHOLE canvas (pixels the shape
@@ -208,6 +219,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         SkPaint p;
         p.setAntiAlias(true);
         p.setColor((SkColor)c.color);
+        applyShadow(p, c);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
         break;
       }
@@ -220,6 +232,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setStrokeJoin((SkPaint::Join)c.join);
         p.setStrokeMiter(c.miterLimit);
         p.setColor((SkColor)c.color);
+        applyShadow(p, c);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
         break;
       }
@@ -326,6 +339,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         SkPath path = builder.snapshot();
         path.setFillType(c.evenOdd ? SkPathFillType::kEvenOdd
                                    : SkPathFillType::kWinding);
+        applyShadow(p, c);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawPath(path, pp); });
         break;
       }
@@ -338,6 +352,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setStrokeJoin((SkPaint::Join)c.join);
         p.setStrokeMiter(c.miterLimit);
         p.setColor((SkColor)c.color);
+        applyShadow(p, c);
         drawComposited(c, p,
                        [&](const SkPaint& pp) { canvas->drawPath(builder.snapshot(), pp); });
         break;

@@ -116,6 +116,16 @@ uint32_t CanvasContext::withAlpha(uint32_t color) const {
   return (a << 24) | (color & 0x00FFFFFF);
 }
 
+void CanvasContext::snapshotShadow(Command& c) const {
+  const uint32_t col = withAlpha(shadowColor_);
+  if ((col >> 24) == 0) return;
+  if (shadowBlur_ <= 0 && shadowOffsetX_ == 0 && shadowOffsetY_ == 0) return;
+  c.shadowColor = col;
+  c.shadowBlur = shadowBlur_;
+  c.shadowDx = shadowOffsetX_;
+  c.shadowDy = shadowOffsetY_;
+}
+
 jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   std::string name = nameId.utf8(rt);
 
@@ -131,6 +141,11 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   if (name == "miterLimit") return jsi::Value((double)miterLimit_);
   if (name == "globalCompositeOperation")
     return jsi::String::createFromUtf8(rt, kBlendNames[(uint8_t)blend_]);
+  if (name == "shadowColor")
+    return jsi::String::createFromUtf8(rt, shadowColorStr_);
+  if (name == "shadowBlur") return jsi::Value((double)shadowBlur_);
+  if (name == "shadowOffsetX") return jsi::Value((double)shadowOffsetX_);
+  if (name == "shadowOffsetY") return jsi::Value((double)shadowOffsetY_);
 
   // --- Methods: built once, then cached (see methodCache_). Fast path first, so
   // a hot call like ctx.arc(...) never rebuilds the function or its lambda. ---
@@ -162,6 +177,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       Command c{Op::FillRect};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
       c.color = withAlpha(fillColor_); c.blend = (uint8_t)blend_;
+      snapshotShadow(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -173,6 +189,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
       c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
       c.blend = (uint8_t)blend_;
+      snapshotShadow(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -275,6 +292,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     return method(1, [this](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::Fill}; c.color = withAlpha(fillColor_); c.blend = (uint8_t)blend_;
       c.evenOdd = (n > 0 && a[0].isString() && a[0].asString(rt).utf8(rt) == "evenodd");
+      snapshotShadow(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -285,6 +303,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
       c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
       c.blend = (uint8_t)blend_;
+      snapshotShadow(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -357,6 +376,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
         for (const Command& tc : tcmds) commands_.push_back(tc);
       }
       Command f{Op::Fill}; f.color = col; f.blend = (uint8_t)blend_;
+      snapshotShadow(f);
       commands_.push_back(f);
       return jsi::Value::undefined();
     });
@@ -487,6 +507,34 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
     if (value.isString()) blendOpFromStr(value.asString(rt).utf8(rt), blend_);
     return;
   }
+  if (name == "shadowColor") {
+    if (value.isString()) {
+      std::string s = value.asString(rt).utf8(rt);
+      uint32_t c;
+      if (parseColor(s, c)) {
+        shadowColor_ = c;
+        shadowColorStr_ = s;
+      }
+    }
+    return;
+  }
+  if (name == "shadowBlur") {
+    if (value.isNumber()) {
+      double b = value.asNumber();
+      if (std::isfinite(b) && b >= 0) shadowBlur_ = (float)b;
+    }
+    return;
+  }
+  if (name == "shadowOffsetX") {
+    if (value.isNumber() && std::isfinite(value.asNumber()))
+      shadowOffsetX_ = (float)value.asNumber();
+    return;
+  }
+  if (name == "shadowOffsetY") {
+    if (value.isNumber() && std::isfinite(value.asNumber()))
+      shadowOffsetY_ = (float)value.asNumber();
+    return;
+  }
   if (name == "globalAlpha") {
     if (value.isNumber()) {
       double a = value.asNumber();
@@ -501,6 +549,7 @@ std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
   static const char* names[] = {
       "fillStyle", "strokeStyle", "lineWidth", "globalAlpha",
       "lineCap", "lineJoin", "miterLimit", "globalCompositeOperation",
+      "shadowColor", "shadowBlur", "shadowOffsetX", "shadowOffsetY",
       "clearRect", "fillRect", "strokeRect",
       "beginPath", "closePath", "moveTo", "lineTo", "arc", "rect",
       "quadraticCurveTo", "bezierCurveTo", "arcTo", "ellipse", "roundRect",
