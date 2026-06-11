@@ -43,7 +43,8 @@
 | Çoklu canvas | Desteklenir (her şey **instance-scoped**, global değil) |
 | Saydamlık | Varsayılan **saydam** (web gibi); kullanıcı `clearRect` ile temizler |
 | Thread | v1 aynı thread yeter; **worklet rafta** (v2+) |
-| v2 | text + image + sürükleme event'leri (down/move/up) + gradient/shadow |
+| v1 yayın kapısı | **text + image** — bunlar bitmeden npm'e çıkılmaz (insanların önüne çıkma eşiği). Gradient/shadow/composite/filter/hit-test zaten 0.1'de tamamlandı |
+| v2 | sürükleme event'leri (down/move/up) + pattern + pixel erişimi + worklet |
 
 ---
 
@@ -173,6 +174,11 @@ onPress={(e) => {
 - ctx katmanı Skia-free kalır: `GradientSpec` (saf veri) paint anında frame'in `CommandList.gradients`'ine **snapshot**'lanır (sonradan eklenen stop önceki çizimi etkilemez); `Command.shader` index'i ile referans. Renderer `SkShaders::LinearGradient` / `TwoPointConicalGradient` üretir.
 - `CommandList` artık struct: `{commands, gradients}` (vector-benzeri forwarding ile eski kullanım aynen derlenir).
 
+### Hit testing
+- `isPointInPath([path2d,] x, y, fillRule?)` / `isPointInStroke([path2d,] x, y)` — senkron (JSI). Stroke testi mevcut `lineWidth/lineCap/lineJoin/miterLimit`'i kullanır (web gibi).
+- Mimari: renderer'ın path kurulumu `appendPathOp`'a ayıklandı; hit test ile çizim **birebir aynı geometriyi** kurar. ctx Skia-free kalır — `PathHitTest.h` Skia'sız arayüz, implementasyon renderer'da (`SkPath::contains` + `skpathutils::FillPathWithPaint`). ctx mevcut path'i aynalar (`pathCmds_`, beginPath'te temizlenir; flush'tan etkilenmez).
+- **Bilinen sapma (dokümante):** nokta path-space'te test edilir; ertelenmiş canvas transform'ları uygulanmaz (ctx CTM takip etmez). `fillInstances` damgaları aynalanmaz (hot path'te N×template kopyası olurdu).
+
 ### Renk parse (C++)
 - Hex: `#rgb`, `#rrggbb`, `#rrggbbaa`
 - `rgb(...)`, `rgba(...)`
@@ -193,16 +199,20 @@ Binlerce moving primitive için **tek bir** kaçış kapısı. Tasarım ilkesi: 
 
 > **Hermes tuzağı:** Host function'lar Hermes'te `new` ile kullanılamaz. Çözüm: `__rncanvasCreatePath` C++ factory + `global.Path2D = function Path2D(){ return factory(); }` JS wrapper — `new Path2D()` her iki çalışma zamanında da çalışır.
 
-### Stretch (zaman kalırsa 0.1'e girer, Skia'da kolay)
-`quadraticCurveTo`, `bezierCurveTo`, `arcTo`, `ellipse`, `lineCap`, `lineJoin`, `miterLimit`, `setTransform`/`transform`/`resetTransform`, `clip()`
+### Stretch op'ları ✅ (tamamlandı)
+`quadraticCurveTo`, `bezierCurveTo`, `arcTo`, `ellipse`, `roundRect`, `lineCap`, `lineJoin`, `miterLimit`, `setTransform`/`transform`/`resetTransform`, `clip()`, `fill(fillRule)` — hepsi 0.1'de (yukarıdaki listelerde).
 
-### 0.1'de KESİNLİKLE YOK (→ v2)
-- Text / font (`fillText`, `measureText`, `font`, `textAlign`...)
-- Image (`drawImage`, `useImage`)
-- Pattern (`createPattern` — image'a bağlı)
-- Pixel erişimi (`getImageData`, `putImageData`)
+### v1 YAYIN KAPISI — text + image (SIRADA)
+İnsanların önüne çıkmadan önce bitecekler; ikisi de **tek Skia rebuild turunda** açılır (codec + text flag'leri birlikte derlenir, iki ayrı rebuild'e gerek yok):
+- **Image:** `useImage(source)` (require / URI / base64) + `drawImage` overload'ları — codec rebuild (png/jpeg/webp decode) + GPU texture upload + render-thread kaynak yaşam döngüsü.
+- **Text / font:** `font` shorthand parse + `fillText`/`strokeText` (tek satır) + `measureText` + `textAlign`/`textBaseline` — text rebuild (freetype/harfbuzz/skshaper) + sistem fontları + opsiyonel `.ttf`.
 
-> Not: gradient, shadow, `globalCompositeOperation`, `filter`, `isPointInPath`/`isPointInStroke` başta v2'deydi; Skia rebuild gerektirmedikleri anlaşılınca (semboller mevcut lib'de) 0.1'e alındı (yukarıda).
+### v1'de YOK (→ v2)
+- Pattern (`createPattern` — image altyapısını bekler, image'dan sonra ucuz)
+- Pixel erişimi (`getImageData`, `putImageData` — render-thread readback senkronizasyonu)
+- `toDataURL` / `toBlob` (readback + encode)
+
+> Not: gradient, shadow, `globalCompositeOperation`, `filter`, `isPointInPath`/`isPointInStroke` başta v2'deydi; Skia rebuild gerektirmedikleri anlaşılınca (semboller mevcut lib'de) 0.1'e alındı ve tamamlandı (yukarıda).
 
 ---
 
@@ -358,7 +368,9 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 >
 > **Adım 8 (TAMAMLANDI):** ✅ **Katman 1 instancing API DOĞRULANDI.** Tek `fillInstances(template: Path2D, data, count)` + `Path2D` eklendi (daire/dikdörtgen ayrı fonksiyon değil — hepsi Path2D). N nesne hem 1 JSI çağrısına hem **1 fill**'e iner (renderer `Op::PathMatrix` ile template'i tek path'e damgalar). 3k bubble iOS sim: **60fps**, drawJSI **0.27ms**. BubbleSystem SoA (Float32Array) + renk başına ColorGroup. FrameLoop robustluğu doğrulandı. iOS derleme: `BUILD SUCCEEDED` + render doğrulandı (3000 daire ekran görüntüsü). Bkz. §13 "Adım 8".
 >
-> **SIRADAKI:** Paketleme/cila: `bob build`, README, npm publish. Stretch ctx op'ları (§4: `quadraticCurveTo`, `bezierCurveTo`, `ellipse`, `lineCap/Join`, `clip`, `setTransform`) ve perf v2 (K2 simülasyonu C++'a taşıma) zaman kalırsa.
+> **Adım 9 (TAMAMLANDI):** ✅ **ctx API büyük genişlemesi — rebuild'siz her şey bitti.** Stretch op'ları (curves/ellipse/roundRect/clip/line styles/transforms), **Tier 3** (globalCompositeOperation 26 mod + shadow + gradient/paint-refactor), **Tier 4'ün rebuild'sizleri** (isPointInPath/isPointInStroke + ctx.filter CSS filtreleri). Kritik keşif: gradient/DropShadow/ColorFilter sembolleri minimal lib'de zaten derliydi — **Skia rebuild gerekmedi.** Example app **10 sayfalık API test galerisine** dönüştü (her sayfa bir API alanını senaryoyla test eder; Bubbles perf harness korundu). Tümü syntax-check + typecheck + host-test (filter parser 19 assertion) temiz; **cihaz/sim görsel doğrulaması BEKLİYOR.** Bkz. §13 "Adım 9".
+>
+> **SIRADAKI (v1 yayın yolu, §4 "YAYIN KAPISI"):** **(1)** Tek Skia rebuild turu — codec (png/jpeg/webp decode) + text (freetype/harfbuzz/skshaper) flag'leri **birlikte**, 4 hedef (iOS device/sim, Android arm64/x86_64). **(2)** Image: `useImage` + `drawImage`. **(3)** Text: `font`/`fillText`/`measureText`/`textAlign`/`textBaseline`. **(4)** Galeriye Image+Text sayfaları, iki platformda görsel doğrulama. **(5)** Paketleme/cila: `bob build`, README, npm publish → **yayın.**
 
 0. ✅ **İskelet + baseline:** `create-react-native-library` (fabric-view, kotlin-objc) ile `<CanvasView>` kuruldu; Android (Pixel 4 / API 34) ve iOS (iPhone 16 / iOS 26.5) üzerinde çalışan boş view doğrulandı.
 1. **Skia binary'lerini linkle** (Android + iOS) — ilk ve en kritik engel.
@@ -374,12 +386,14 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 
 ## 12. v2 yol haritası (taahhüt edilenler)
 
-- **Text / font:** `font` shorthand parse + `fillText`/`strokeText` (tek satır) + `measureText` + `textAlign`/`textBaseline`. Sistem fontları + opsiyonel `.ttf` yükleme.
-- **Image:** `useImage(source)` (require / URI / base64) + `drawImage` overload'ları.
+> ~~Text~~ ve ~~Image~~ **v1 yayın kapısına alındı** (§4) — v2 değil. ~~Gradient~~ ✅ ~~shadow~~ ✅ ~~globalCompositeOperation~~ ✅ ~~clip~~ ✅ ~~filter~~ ✅ ~~isPointInPath~~ ✅ tamamlandı.
+
 - **Sürükleme event'leri:** `onTouchStart` / `onTouchMove` / `onTouchEnd` (aynı koordinat altyapısı).
-- **Pattern** (`createPattern`, image'a bağlı). ~~Gradient~~ ✅ ve ~~shadow~~ ✅ 0.1'e alındı (§4).
+- **Pattern** (`createPattern`, v1 image altyapısının üstüne ucuz).
+- **Pixel erişimi:** `getImageData`/`putImageData` (render-thread readback senkronizasyonu + ArrayBuffer köprüsü).
+- **`toDataURL` / `toBlob`** (readback + PNG/JPEG encode + base64).
 - **Worklet runtime:** çizimi ayrı thread'e taşıma (Reanimated'e yaslanma vs. kendi runtime — o zaman karar verilecek). `ctx` HostObject'i worklet runtime'ına kurma gereği not edildi.
-- Olası: `getImageData`/`putImageData`, `globalCompositeOperation`, `clip`, `toDataURL`.
+- **Web-uyumluluk cilası:** `save/restore`'un TÜM ctx state'ini (fillStyle, lineWidth, shadow, blend...) stack'lemesi (şu an yalnız transform+clip — bilinen sapma), `hsl()/hsla()` + 140 CSS isimli renk, `fill(path)/stroke(path)/clip(path)` Path2D overload'ları, `setLineDash`, `createConicGradient` (SweepGradient lib'de hazır), `ctx.canvas.width/height`.
 
 ---
 
@@ -589,6 +603,23 @@ CPU raster (her frame `SkBitmap` → `CGImage` → `layer.contents`) → **GPU r
 4. **FrameLoop robustluğu:** Throw eden draw callback (her frame `throw`) 6 saniye / 60fps boyunca loop'u öldürmedi — `FrameLoop.cpp:49-54` try/catch doğru çalışıyor.
 5. **Yanlış teşhis düzeltmesi:** "Loop öldü" gözlemi aslında `installPath2D`'nin `installFrameLoopApi`'den önce çağrılmasından kaynaklanıyordu. Kurulum sırası düzeltildi.
 6. **Zero-copy ArrayBuffer:** `asFloat32` byteOffset + length'i JS'ten okuyup ArrayBuffer'a pointer döner — frame boyunca geçerli, kopyasız.
+
+### Adım 9 — ctx API genişlemesi (Tier 3 + rebuild'siz Tier 4) + test galerisi TAMAMLANDI ✅
+7 commit (`4ae05f1`…filter): stretch op'ları → globalCompositeOperation → shadow → gradient → isPointInPath/isPointInStroke → example galerisi → ctx.filter. **Cihaz/sim görsel doğrulaması henüz yapılmadı** (syntax/type/lint/host-test temiz).
+
+**Ana keşif — rebuild'siz Tier 3/4:** `nm` ile doğrulandı: `SkGradientShader`(m148'de `SkShaders::*Gradient`), `SkImageFilters::DropShadow`, `SkColorFilters::Matrix` sembolleri minimal CPU-only lib'de ZATEN derli. "Gradient/shadow/filter = rebuild" varsayımı yanlıştı; yalnız codec (image) ve text gerçek rebuild ister.
+
+**Paint modeli (bugünkü hali):** `CommandList` artık struct `{commands, gradients, filters}` — vector-benzeri forwarding (push_back/clear/reserve/size/begin/end) sayesinde tüm eski call site'lar (surfaces, registry, Path2D) değişmeden derlendi. `Command` düz POD kaldı: shader/filter **index**, sidecar'lar değişken boyutlu veriyi taşır. Snapshot yardımcıları ctx'te toplandı: `snapshotFillStyle/snapshotStrokeStyle` (renk veya gradient; globalAlpha gradient'te paint alpha'sı olarak), `snapshotShadow` (yalnız görünürse — gölgesiz yol bedava), `snapshotFilter` (frame-içi index cache). Gradient dedupe: `(GradientHost*, version)`.
+
+**Kritik teknik kararlar/öğrenmeler:**
+1. **m148 gradient API'si:** `SkGradientShader` YOK → `include/effects/SkGradient.h` + `SkShaders::LinearGradient/TwoPointConicalGradient` (ikincisi HTML createRadialGradient'in iki-daire semantiğine birebir referans verir).
+2. **Tüm-canvas composite modları** (`source-in/out`, `destination-in/atop`, `copy`): plain draw yalnız shape coverage'ını etkiler; web tüm canvas'ı ister → şeffaf `saveLayer`'a srcOver çiz, layer'ı modla composite et (Chromium yaklaşımı).
+3. **Hit test = çizim geometrisi:** renderer'ın path switch'i `appendPathOp`'a ayıklandı; hem render loop hem `pathHitTest/strokeHitTest` aynı fonksiyonu kullanır. ctx Skia-free kalsın diye `PathHitTest.h` Skia'sız arayüz, implementasyon CanvasRenderer.cpp'de. Stroke testi `skpathutils::FillPathWithPaint`.
+4. **Filter zinciri + gölge sırası:** canvas spec'te gölge FİLTRELENMİŞ sonuca uygulanır → `applyEffects` filter zincirini kurup DropShadow'a `input` olarak verir. CSS `blur(<len>)` uzunluğu doğrudan sigma'dır; `drop-shadow`/`shadowBlur` yarıçapı sigma = r/2.
+5. **Sidecar kalıbı** (gradient'te kuruldu, filter'da tekrarlandı): değişken boyutlu paint verisi `CommandList`'e ayrı vector, komutta i32 index. `setLineDash` gibi gelecek işler için hazır şablon.
+6. **Tuzaklar:** commitlint `subject-case` büyük harf başlatmayı reddediyor ("API…" yazılamaz); RN 0.85 strict-api'de `StyleSheet.absoluteFillObject` yok (`absoluteFill` kullan); prettier çok-argümanlı ctx çağrılarını kırdırıyor (lint --fix yeterli).
+
+**Example app = API test galerisi (10 sayfa):** `App.tsx` useState router (nav bağımlılığı yok) + `pages/`: Bubbles (perf harness), Shapes & Curves, Line Styles (miterLimit 10-vs-2 animasyonlu), Transforms (iç içe save/restore güneş sistemi), Gradients (frame başına yeni gradient = snapshot kanıtı), Shadows, Composite (26 mod cycle, şeffaf canvas), Filters (10 filtre grid + animasyonlu + zincir), Clip & Fill Rules, Hit Testing (tap → Path2D overload'ları). Yayın öncesi Image + Text sayfaları eklenecek.
 
 ### Çalıştırma komutları (referans)
 ```bash
