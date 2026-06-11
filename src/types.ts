@@ -101,6 +101,25 @@ export interface Ctx {
   stroke(): void;
   clip(fillRule?: 'nonzero' | 'evenodd'): void;
 
+  // Hit testing (synchronous). isPointInStroke uses the current
+  // lineWidth/lineCap/lineJoin/miterLimit, like the web.
+  // NOTE: the point is tested in path space — deferred canvas transforms
+  // (translate/rotate/...) are NOT applied to the test, so build paths in
+  // untransformed coordinates when you need hit testing.
+  isPointInPath(
+    x: number,
+    y: number,
+    fillRule?: 'nonzero' | 'evenodd'
+  ): boolean;
+  isPointInPath(
+    path: Path2D,
+    x: number,
+    y: number,
+    fillRule?: 'nonzero' | 'evenodd'
+  ): boolean;
+  isPointInStroke(x: number, y: number): boolean;
+  isPointInStroke(path: Path2D, x: number, y: number): boolean;
+
   // --- Non-standard instancing fast path (experimental react-native-canvas
   // extension; NOT part of CanvasRenderingContext2D). ---
   //

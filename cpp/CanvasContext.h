@@ -56,6 +56,13 @@ class CanvasContext : public facebook::jsi::HostObject {
   void snapshotFillStyle(Command& c);
   void snapshotStrokeStyle(Command& c);
 
+  // Appends a path-building command to BOTH the frame batch and the current-
+  // path mirror (pathCmds_) so hit tests see the same geometry that draws.
+  void pushPathCmd(const Command& c) {
+    commands_.push_back(c);
+    pathCmds_.push_back(c);
+  }
+
   // Appends a copy of the gradient's spec to commands_.gradients (canvas
   // snapshot semantics: later addColorStop must not affect earlier draws) and
   // returns its index. Deduped per frame by (host, version).
@@ -63,6 +70,13 @@ class CanvasContext : public facebook::jsi::HostObject {
 
   FlushFn flush_;
   CommandList commands_;
+
+  // Mirror of the current path (commands since the last beginPath), kept for
+  // synchronous isPointInPath/isPointInStroke. Survives flush (the current
+  // path is ctx state, not frame state). fillInstances does NOT mirror its
+  // stamped template (would copy N*template commands on the hot path); hit
+  // tests reflect explicitly-built paths only.
+  std::vector<Command> pathCmds_;
 
   // Cache of method host-functions keyed by name. Hermes does NOT cache
   // HostObject property gets, so without this every `ctx.arc(...)` would rebuild

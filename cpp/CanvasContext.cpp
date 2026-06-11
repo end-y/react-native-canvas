@@ -7,6 +7,7 @@
 #include "CanvasGradient.h"
 #include "ColorParser.h"
 #include "Path2D.h"
+#include "PathHitTest.h"
 
 namespace rncanvas {
 
@@ -237,26 +238,27 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   if (name == "beginPath") {
     return method(0, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value*, size_t) {
       commands_.push_back(Command{Op::BeginPath});
+      pathCmds_.clear();
       return jsi::Value::undefined();
     });
   }
   if (name == "closePath") {
     return method(0, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value*, size_t) {
-      commands_.push_back(Command{Op::ClosePath});
+      pushPathCmd(Command{Op::ClosePath});
       return jsi::Value::undefined();
     });
   }
   if (name == "moveTo") {
     return method(2, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::MoveTo}; c.x = num(a, n, 0); c.y = num(a, n, 1);
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
   if (name == "lineTo") {
     return method(2, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::LineTo}; c.x = num(a, n, 0); c.y = num(a, n, 1);
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
@@ -266,7 +268,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2);  // w = radius
       c.a0 = num(a, n, 3); c.a1 = num(a, n, 4);
       c.ccw = (n > 5 && a[5].isBool()) ? a[5].getBool() : false;
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
@@ -274,7 +276,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     return method(4, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::RectPath};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
@@ -282,7 +284,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     return method(4, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::QuadraticCurveTo};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
@@ -291,7 +293,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       Command c{Op::BezierCurveTo};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
       c.a0 = num(a, n, 4); c.a1 = num(a, n, 5);
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
@@ -300,7 +302,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       Command c{Op::ArcTo};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
       c.a0 = num(a, n, 4);  // radius
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
@@ -311,7 +313,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.a2 = num(a, n, 4);                 // rotation
       c.a0 = num(a, n, 5); c.a1 = num(a, n, 6);  // start, end
       c.ccw = (n > 7 && a[7].isBool()) ? a[7].getBool() : false;
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
@@ -320,7 +322,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       Command c{Op::RoundRect};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
       c.a0 = num(a, n, 4);  // uniform corner radius (number form only for 0.1)
-      commands_.push_back(c);
+      pushPathCmd(c);
       return jsi::Value::undefined();
     });
   }
@@ -352,6 +354,42 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.evenOdd = (n > 0 && a[0].isString() && a[0].asString(rt).utf8(rt) == "evenodd");
       commands_.push_back(c);
       return jsi::Value::undefined();
+    });
+  }
+
+  // Hit testing --------------------------------------------------------------
+  // isPointInPath(x, y, fillRule?) or isPointInPath(path2d, x, y, fillRule?);
+  // isPointInStroke(x, y) or isPointInStroke(path2d, x, y) — stroke params come
+  // from the current lineWidth/lineCap/lineJoin/miterLimit, like the web.
+  // Synchronous (jsi). Coordinates are in path space: deferred canvas
+  // transforms are NOT applied (ctx doesn't track the CTM — see types.ts).
+  if (name == "isPointInPath" || name == "isPointInStroke") {
+    const bool isStroke = (name == "isPointInStroke");
+    return method(4, [this, isStroke](jsi::Runtime& rt, const jsi::Value&,
+                                      const jsi::Value* a, size_t n) {
+      const std::vector<Command>* cmds = &pathCmds_;
+      size_t i = 0;
+      if (n > 0 && a[0].isObject()) {
+        jsi::Object o = a[0].getObject(rt);
+        if (o.isHostObject(rt)) {
+          if (auto host =
+                  std::dynamic_pointer_cast<Path2DHost>(o.getHostObject(rt))) {
+            cmds = &host->commands().commands;
+            i = 1;
+          }
+        }
+        if (i == 0) return jsi::Value(false);  // object but not a Path2D
+      }
+      const float x = (float)num(a, n, i);
+      const float y = (float)num(a, n, i + 1);
+      if (isStroke) {
+        return jsi::Value(strokeHitTest(*cmds, x, y, lineWidth_,
+                                        (uint8_t)lineCap_, (uint8_t)lineJoin_,
+                                        miterLimit_));
+      }
+      const bool evenOdd = (n > i + 2 && a[i + 2].isString() &&
+                            a[i + 2].asString(rt).utf8(rt) == "evenodd");
+      return jsi::Value(pathHitTest(*cmds, x, y, evenOdd));
     });
   }
 
@@ -627,6 +665,7 @@ std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
       "beginPath", "closePath", "moveTo", "lineTo", "arc", "rect",
       "quadraticCurveTo", "bezierCurveTo", "arcTo", "ellipse", "roundRect",
       "fill", "stroke", "clip", "fillInstances",
+      "isPointInPath", "isPointInStroke",
       "save", "restore", "translate", "scale", "rotate",
       "transform", "setTransform", "resetTransform",
       "createLinearGradient", "createRadialGradient",

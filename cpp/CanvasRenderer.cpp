@@ -2,6 +2,9 @@
 
 #include <cmath>
 
+#include "PathHitTest.h"
+#include "include/core/SkPathUtils.h"
+
 #include "include/core/SkBlendMode.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
@@ -217,7 +220,150 @@ void addEllipseCore(SkPathBuilder& builder, double cx, double cy, double rx,
                 /*forceMoveTo=*/false);
 }
 
+// Appends a path-building command to `builder`, applying the current
+// Op::PathMatrix state (set per-instance by fillInstances; identity for
+// ordinary drawing). Returns false for non-path ops so the render loop can
+// handle them. Shared by renderCommands and the isPointInPath/isPointInStroke
+// hit testers, so hit tests see exactly the geometry that gets drawn.
+bool appendPathOp(SkPathBuilder& builder, const Command& c, SkMatrix& pathMatrix,
+                  bool& pmIdentity) {
+  // Maps a path-space point through the current PathMatrix (identity = no-op).
+  auto mapPt = [&](float x, float y) -> SkPoint {
+    return pmIdentity ? SkPoint{x, y} : pathMatrix.mapPoint({x, y});
+  };
+
+  switch (c.op) {
+    case Op::BeginPath:
+      builder.reset();
+      pathMatrix = SkMatrix::I();
+      pmIdentity = true;
+      return true;
+    case Op::PathMatrix:
+      // Packed 2x3 affine: x=a, y=b, w=c, h=d, a0=e, a1=f.
+      pathMatrix.setAll(c.x, c.w, c.a0, c.y, c.h, c.a1, 0, 0, 1);
+      pmIdentity = pathMatrix.isIdentity();
+      return true;
+    case Op::MoveTo: {
+      const SkPoint p = mapPt(c.x, c.y);
+      builder.moveTo(p.x(), p.y());
+      return true;
+    }
+    case Op::LineTo: {
+      const SkPoint p = mapPt(c.x, c.y);
+      builder.lineTo(p.x(), p.y());
+      return true;
+    }
+    case Op::Arc:
+      if (pmIdentity) {
+        addArcCore(builder, c.x, c.y, c.w, c.a0, c.a1, c.ccw);
+      } else {
+        addArcTransformed(builder, c, pathMatrix);
+      }
+      return true;
+    case Op::RectPath:
+      if (pmIdentity) {
+        builder.addRect(rectOf(c));
+      } else {
+        // Map the 4 corners; under rotation the rect becomes a quad.
+        const SkPoint p0 = pathMatrix.mapPoint({c.x, c.y});
+        const SkPoint p1 = pathMatrix.mapPoint({c.x + c.w, c.y});
+        const SkPoint p2 = pathMatrix.mapPoint({c.x + c.w, c.y + c.h});
+        const SkPoint p3 = pathMatrix.mapPoint({c.x, c.y + c.h});
+        builder.moveTo(p0).lineTo(p1).lineTo(p2).lineTo(p3).close();
+      }
+      return true;
+    case Op::ClosePath:
+      builder.close();
+      return true;
+    case Op::QuadraticCurveTo: {
+      const SkPoint cp = mapPt(c.x, c.y);
+      const SkPoint to = mapPt(c.w, c.h);
+      builder.quadTo(cp, to);
+      return true;
+    }
+    case Op::BezierCurveTo: {
+      const SkPoint c1 = mapPt(c.x, c.y);
+      const SkPoint c2 = mapPt(c.w, c.h);
+      const SkPoint to = mapPt(c.a0, c.a1);
+      builder.cubicTo(c1, c2, to);
+      return true;
+    }
+    case Op::ArcTo: {
+      const SkPoint p1 = mapPt(c.x, c.y);
+      const SkPoint p2 = mapPt(c.w, c.h);
+      SkScalar radius = c.a0;
+      if (!pmIdentity) {  // scale the radius by the transform's area scale
+        const SkScalar det = pathMatrix.getScaleX() * pathMatrix.getScaleY() -
+                             pathMatrix.getSkewX() * pathMatrix.getSkewY();
+        radius *= std::sqrt(std::fabs(det));
+      }
+      builder.arcTo(p1, p2, radius);
+      return true;
+    }
+    case Op::Ellipse: {
+      if (pmIdentity && c.a2 == 0.0f) {
+        addEllipseCore(builder, c.x, c.y, c.w, c.h, c.a0, c.a1, c.ccw);
+      } else {
+        // Build centered + unrotated, then rotate, translate to center, and
+        // apply the instance PathMatrix.
+        SkPathBuilder tmp;
+        addEllipseCore(tmp, 0, 0, c.w, c.h, c.a0, c.a1, c.ccw);
+        SkMatrix m = pathMatrix;  // identity when pmIdentity
+        m.preTranslate(c.x, c.y);
+        m.preRotate((SkScalar)(c.a2 * kRadToDeg));
+        builder.addPath(tmp.snapshot().makeTransform(m));
+      }
+      return true;
+    }
+    case Op::RoundRect: {
+      const SkRRect rr = SkRRect::MakeRectXY(rectOf(c), c.a0, c.a0);
+      if (pmIdentity) {
+        builder.addRRect(rr);
+      } else {
+        SkPathBuilder tmp;
+        tmp.addRRect(rr);
+        builder.addPath(tmp.snapshot().makeTransform(pathMatrix));
+      }
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+// Builds an SkPath from recorded path commands (the hit-test entry points).
+SkPath buildPathFromCommands(const std::vector<Command>& cmds, bool evenOdd) {
+  SkPathBuilder builder;
+  SkMatrix pathMatrix = SkMatrix::I();
+  bool pmIdentity = true;
+  for (const Command& c : cmds) {
+    appendPathOp(builder, c, pathMatrix, pmIdentity);
+  }
+  SkPath path = builder.snapshot();
+  path.setFillType(evenOdd ? SkPathFillType::kEvenOdd
+                           : SkPathFillType::kWinding);
+  return path;
+}
+
 }  // namespace
+
+bool pathHitTest(const std::vector<Command>& pathCmds, float x, float y,
+                 bool evenOdd) {
+  return buildPathFromCommands(pathCmds, evenOdd).contains(x, y);
+}
+
+bool strokeHitTest(const std::vector<Command>& pathCmds, float x, float y,
+                   float lineWidth, uint8_t cap, uint8_t join,
+                   float miterLimit) {
+  const SkPath src = buildPathFromCommands(pathCmds, /*evenOdd=*/false);
+  SkPaint paint;
+  paint.setStyle(SkPaint::kStroke_Style);
+  paint.setStrokeWidth(lineWidth);
+  paint.setStrokeCap((SkPaint::Cap)cap);
+  paint.setStrokeJoin((SkPaint::Join)join);
+  paint.setStrokeMiter(miterLimit);
+  return skpathutils::FillPathWithPaint(src, paint).contains(x, y);
+}
 
 void renderCommands(SkCanvas* canvas, const CommandList& commands) {
   SkPathBuilder builder;
@@ -230,11 +376,6 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
   // run. setTransform/resetTransform are relative to THIS base (web works in
   // logical px; DPR is internal), so capture it once.
   const SkMatrix base = canvas->getLocalToDeviceAs3x3();
-
-  // Maps a path-space point through the current PathMatrix (identity = no-op).
-  auto mapPt = [&](float x, float y) -> SkPoint {
-    return pmIdentity ? SkPoint{x, y} : pathMatrix.mapPoint({x, y});
-  };
 
   // Runs `draw(paint)` honoring the command's composite op. Most modes map 1:1
   // onto the paint's blend mode; the full-canvas modes go through saveLayer
@@ -253,6 +394,10 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
   };
 
   for (const Command& c : commands) {
+    // Path-building ops (BeginPath..RoundRect + PathMatrix) all funnel through
+    // the shared appendPathOp; everything else is handled below.
+    if (appendPathOp(builder, c, pathMatrix, pmIdentity)) continue;
+
     switch (c.op) {
       case Op::ClearRect: {
         SkPaint p;
@@ -279,101 +424,6 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         applyStyle(p, c, commands);
         applyShadow(p, c);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
-        break;
-      }
-
-      case Op::BeginPath:
-        builder.reset();
-        pathMatrix = SkMatrix::I();
-        pmIdentity = true;
-        break;
-      case Op::PathMatrix:
-        // Packed 2x3 affine: x=a, y=b, w=c, h=d, a0=e, a1=f.
-        pathMatrix.setAll(c.x, c.w, c.a0, c.y, c.h, c.a1, 0, 0, 1);
-        pmIdentity = pathMatrix.isIdentity();
-        break;
-      case Op::MoveTo: {
-        const SkPoint p = pmIdentity ? SkPoint{c.x, c.y} : pathMatrix.mapPoint({c.x, c.y});
-        builder.moveTo(p.x(), p.y());
-        break;
-      }
-      case Op::LineTo: {
-        const SkPoint p = pmIdentity ? SkPoint{c.x, c.y} : pathMatrix.mapPoint({c.x, c.y});
-        builder.lineTo(p.x(), p.y());
-        break;
-      }
-      case Op::Arc:
-        if (pmIdentity) {
-          addArcCore(builder, c.x, c.y, c.w, c.a0, c.a1, c.ccw);
-        } else {
-          addArcTransformed(builder, c, pathMatrix);
-        }
-        break;
-      case Op::RectPath:
-        if (pmIdentity) {
-          builder.addRect(rectOf(c));
-        } else {
-          // Map the 4 corners; under rotation the rect becomes a quad.
-          const SkPoint p0 = pathMatrix.mapPoint({c.x, c.y});
-          const SkPoint p1 = pathMatrix.mapPoint({c.x + c.w, c.y});
-          const SkPoint p2 = pathMatrix.mapPoint({c.x + c.w, c.y + c.h});
-          const SkPoint p3 = pathMatrix.mapPoint({c.x, c.y + c.h});
-          builder.moveTo(p0).lineTo(p1).lineTo(p2).lineTo(p3).close();
-        }
-        break;
-      case Op::ClosePath:
-        builder.close();
-        break;
-      case Op::QuadraticCurveTo: {
-        const SkPoint cp = mapPt(c.x, c.y);
-        const SkPoint to = mapPt(c.w, c.h);
-        builder.quadTo(cp, to);
-        break;
-      }
-      case Op::BezierCurveTo: {
-        const SkPoint c1 = mapPt(c.x, c.y);
-        const SkPoint c2 = mapPt(c.w, c.h);
-        const SkPoint to = mapPt(c.a0, c.a1);
-        builder.cubicTo(c1, c2, to);
-        break;
-      }
-      case Op::ArcTo: {
-        const SkPoint p1 = mapPt(c.x, c.y);
-        const SkPoint p2 = mapPt(c.w, c.h);
-        SkScalar radius = c.a0;
-        if (!pmIdentity) {  // scale the radius by the transform's area scale
-          const SkScalar det = pathMatrix.getScaleX() * pathMatrix.getScaleY() -
-                               pathMatrix.getSkewX() * pathMatrix.getSkewY();
-          radius *= std::sqrt(std::fabs(det));
-        }
-        builder.arcTo(p1, p2, radius);
-        break;
-      }
-      case Op::Ellipse: {
-        if (pmIdentity && c.a2 == 0.0f) {
-          addEllipseCore(builder, c.x, c.y, c.w, c.h, c.a0, c.a1, c.ccw);
-        } else {
-          // Build centered + unrotated, then rotate, translate to center, and
-          // apply the instance PathMatrix.
-          SkPathBuilder tmp;
-          addEllipseCore(tmp, 0, 0, c.w, c.h, c.a0, c.a1, c.ccw);
-          SkMatrix m = pathMatrix;  // identity when pmIdentity
-          m.preTranslate(c.x, c.y);
-          m.preRotate((SkScalar)(c.a2 * kRadToDeg));
-          builder.addPath(tmp.snapshot().makeTransform(m));
-        }
-        break;
-      }
-      case Op::RoundRect: {
-        const SkRRect rr =
-            SkRRect::MakeRectXY(rectOf(c), c.a0, c.a0);
-        if (pmIdentity) {
-          builder.addRRect(rr);
-        } else {
-          SkPathBuilder tmp;
-          tmp.addRRect(rr);
-          builder.addPath(tmp.snapshot().makeTransform(pathMatrix));
-        }
         break;
       }
 
@@ -440,6 +490,8 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
       case Op::ResetTransform:
         canvas->setMatrix(base);
         break;
+      default:
+        break;  // path ops are consumed by appendPathOp above
     }
   }
 }
