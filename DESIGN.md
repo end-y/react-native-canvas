@@ -143,17 +143,27 @@ onPress={(e) => {
 - `moveTo(x, y)` / `lineTo(x, y)`
 - `arc(x, y, r, start, end, ccw?)`
 - `rect(x, y, w, h)`
-- `fill()` / `stroke()`
+- `quadraticCurveTo(cpx, cpy, x, y)` / `bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)`
+- `arcTo(x1, y1, x2, y2, radius)`
+- `ellipse(x, y, rx, ry, rotation, start, end, ccw?)`
+- `roundRect(x, y, w, h, radius)` — 0.1: tek (uniform) sayı yarıçap
+- `fill(fillRule?)` (`"nonzero"` | `"evenodd"`) / `stroke()`
+- `clip(fillRule?)` — geçerli path'i kırpma bölgesi yapar (save/restore ile geri alınır)
 
 ### State & Transform
 - `save()` / `restore()`
 - `translate(x, y)` / `scale(x, y)` / `rotate(angle)`
+- `transform(a, b, c, d, e, f)` / `setTransform(a, b, c, d, e, f)` / `resetTransform()`
+  — `setTransform` içsel DPR tabanına göredir, böylece koordinatlar web gibi logical px kalır.
 
 ### Stiller (property)
 - `fillStyle` (düz renk)
 - `strokeStyle` (düz renk)
 - `lineWidth`
 - `globalAlpha`
+- `lineCap` (`"butt"` | `"round"` | `"square"`)
+- `lineJoin` (`"miter"` | `"round"` | `"bevel"`)
+- `miterLimit`
 
 ### Renk parse (C++)
 - Hex: `#rgb`, `#rrggbb`, `#rrggbbaa`

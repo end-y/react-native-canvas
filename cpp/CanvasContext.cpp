@@ -45,6 +45,21 @@ const float* asFloat32(jsi::Runtime& rt, const jsi::Value& v, size_t& len) {
   return reinterpret_cast<const float*>(ab.data(rt) + byteOffset);
 }
 
+const char* lineCapStr(LineCap c) {
+  switch (c) {
+    case LineCap::Round: return "round";
+    case LineCap::Square: return "square";
+    default: return "butt";
+  }
+}
+const char* lineJoinStr(LineJoin j) {
+  switch (j) {
+    case LineJoin::Round: return "round";
+    case LineJoin::Bevel: return "bevel";
+    default: return "miter";
+  }
+}
+
 // Reads data[name] as a per-instance float source: a number (constant), a
 // Float32Array (per-instance), or absent (valid=false). Pointer stays valid for
 // the host call (the array is reachable via `data`).
@@ -89,6 +104,9 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     return jsi::String::createFromUtf8(rt, strokeStyleStr_);
   if (name == "lineWidth") return jsi::Value((double)lineWidth_);
   if (name == "globalAlpha") return jsi::Value((double)globalAlpha_);
+  if (name == "lineCap") return jsi::String::createFromUtf8(rt, lineCapStr(lineCap_));
+  if (name == "lineJoin") return jsi::String::createFromUtf8(rt, lineJoinStr(lineJoin_));
+  if (name == "miterLimit") return jsi::Value((double)miterLimit_);
 
   // --- Methods: built once, then cached (see methodCache_). Fast path first, so
   // a hot call like ctx.arc(...) never rebuilds the function or its lambda. ---
@@ -129,6 +147,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       Command c{Op::StrokeRect};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
       c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
+      c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -179,18 +198,75 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       return jsi::Value::undefined();
     });
   }
+  if (name == "quadraticCurveTo") {
+    return method(4, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::QuadraticCurveTo};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "bezierCurveTo") {
+    return method(6, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::BezierCurveTo};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      c.a0 = num(a, n, 4); c.a1 = num(a, n, 5);
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "arcTo") {
+    return method(5, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::ArcTo};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      c.a0 = num(a, n, 4);  // radius
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "ellipse") {
+    return method(8, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::Ellipse};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      c.a2 = num(a, n, 4);                 // rotation
+      c.a0 = num(a, n, 5); c.a1 = num(a, n, 6);  // start, end
+      c.ccw = (n > 7 && a[7].isBool()) ? a[7].getBool() : false;
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "roundRect") {
+    return method(5, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::RoundRect};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      c.a0 = num(a, n, 4);  // uniform corner radius (number form only for 0.1)
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
 
   // Path painting -----------------------------------------------------------
   if (name == "fill") {
-    return method(0, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value*, size_t) {
+    return method(1, [this](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::Fill}; c.color = withAlpha(fillColor_);
+      c.evenOdd = (n > 0 && a[0].isString() && a[0].asString(rt).utf8(rt) == "evenodd");
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
   }
   if (name == "stroke") {
     return method(0, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value*, size_t) {
-      Command c{Op::Stroke}; c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
+      Command c{Op::Stroke};
+      c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
+      c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "clip") {
+    return method(1, [this](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::Clip};
+      c.evenOdd = (n > 0 && a[0].isString() && a[0].asString(rt).utf8(rt) == "evenodd");
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -294,6 +370,26 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       return jsi::Value::undefined();
     });
   }
+  // transform(a,b,c,d,e,f) / setTransform(a,b,c,d,e,f): 2x3 affine packed
+  // x=a,y=b,w=c,h=d,a0=e,a1=f. setTransform is relative to the DPR base (applied
+  // by the renderer), so it works in logical px like the web.
+  if (name == "transform" || name == "setTransform") {
+    const Op op = (name == "transform") ? Op::Transform : Op::SetTransform;
+    return method(6, [this, op](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{op};
+      c.x = num(a, n, 0, 1.0); c.y = num(a, n, 1);
+      c.w = num(a, n, 2); c.h = num(a, n, 3, 1.0);
+      c.a0 = num(a, n, 4); c.a1 = num(a, n, 5);
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "resetTransform") {
+    return method(0, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value*, size_t) {
+      commands_.push_back(Command{Op::ResetTransform});
+      return jsi::Value::undefined();
+    });
+  }
 
   // Flush ------------------------------------------------------------------
   // Not standard canvas; the bridge for step 3 (frame loop will call flush
@@ -338,6 +434,28 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
     if (value.isNumber() && value.asNumber() > 0) lineWidth_ = (float)value.asNumber();
     return;
   }
+  if (name == "lineCap") {
+    if (value.isString()) {
+      std::string s = value.asString(rt).utf8(rt);
+      if (s == "butt") lineCap_ = LineCap::Butt;
+      else if (s == "round") lineCap_ = LineCap::Round;
+      else if (s == "square") lineCap_ = LineCap::Square;
+    }
+    return;
+  }
+  if (name == "lineJoin") {
+    if (value.isString()) {
+      std::string s = value.asString(rt).utf8(rt);
+      if (s == "miter") lineJoin_ = LineJoin::Miter;
+      else if (s == "round") lineJoin_ = LineJoin::Round;
+      else if (s == "bevel") lineJoin_ = LineJoin::Bevel;
+    }
+    return;
+  }
+  if (name == "miterLimit") {
+    if (value.isNumber() && value.asNumber() > 0) miterLimit_ = (float)value.asNumber();
+    return;
+  }
   if (name == "globalAlpha") {
     if (value.isNumber()) {
       double a = value.asNumber();
@@ -351,10 +469,13 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
 std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
   static const char* names[] = {
       "fillStyle", "strokeStyle", "lineWidth", "globalAlpha",
+      "lineCap", "lineJoin", "miterLimit",
       "clearRect", "fillRect", "strokeRect",
       "beginPath", "closePath", "moveTo", "lineTo", "arc", "rect",
-      "fill", "stroke", "fillInstances",
+      "quadraticCurveTo", "bezierCurveTo", "arcTo", "ellipse", "roundRect",
+      "fill", "stroke", "clip", "fillInstances",
       "save", "restore", "translate", "scale", "rotate",
+      "transform", "setTransform", "resetTransform",
       "present",
   };
   std::vector<jsi::PropNameID> out;

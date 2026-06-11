@@ -11,6 +11,7 @@
 #include "include/core/SkPathBuilder.h"
 #include "include/core/SkPathTypes.h"
 #include "include/core/SkPoint.h"
+#include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
 #include "include/core/SkScalar.h"
 
@@ -81,6 +82,33 @@ void addArcTransformed(SkPathBuilder& builder, const Command& c, const SkMatrix&
   builder.addPath(tmp.snapshot().makeTransform(m));
 }
 
+// Appends a canvas-spec elliptical arc (center cx/cy, radii rx/ry, angles
+// start..end, no rotation) to `builder`. Same angle handling as addArcCore but
+// on a (possibly non-square) oval. Rotation is applied by the caller via a
+// matrix on the built sub-path.
+void addEllipseCore(SkPathBuilder& builder, double cx, double cy, double rx,
+                    double ry, double start, double end, bool ccw) {
+  if (!ccw && end - start >= kTwoPi) {
+    end = start + kTwoPi;
+  } else if (ccw && start - end >= kTwoPi) {
+    end = start - kTwoPi;
+  } else if (!ccw && start > end) {
+    end = start + (kTwoPi - std::fmod(start - end, kTwoPi));
+  } else if (ccw && start < end) {
+    end = start - (kTwoPi - std::fmod(end - start, kTwoPi));
+  }
+
+  const double sweep = end - start;
+  const SkRect oval = SkRect::MakeLTRB(cx - rx, cy - ry, cx + rx, cy + ry);
+
+  if (std::fabs(sweep) >= kTwoPi - 1e-6) {
+    builder.addOval(oval, ccw ? SkPathDirection::kCCW : SkPathDirection::kCW);
+    return;
+  }
+  builder.arcTo(oval, (SkScalar)(start * kRadToDeg), (SkScalar)(sweep * kRadToDeg),
+                /*forceMoveTo=*/false);
+}
+
 }  // namespace
 
 void renderCommands(SkCanvas* canvas, const CommandList& commands) {
@@ -89,6 +117,16 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
   // Identity for ordinary drawing; set per-instance by fillInstances.
   SkMatrix pathMatrix = SkMatrix::I();
   bool pmIdentity = true;
+
+  // The canvas already carries the DPR scale applied by the platform before we
+  // run. setTransform/resetTransform are relative to THIS base (web works in
+  // logical px; DPR is internal), so capture it once.
+  const SkMatrix base = canvas->getLocalToDeviceAs3x3();
+
+  // Maps a path-space point through the current PathMatrix (identity = no-op).
+  auto mapPt = [&](float x, float y) -> SkPoint {
+    return pmIdentity ? SkPoint{x, y} : pathMatrix.mapPoint({x, y});
+  };
 
   for (const Command& c : commands) {
     switch (c.op) {
@@ -157,12 +195,67 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
       case Op::ClosePath:
         builder.close();
         break;
+      case Op::QuadraticCurveTo: {
+        const SkPoint cp = mapPt(c.x, c.y);
+        const SkPoint to = mapPt(c.w, c.h);
+        builder.quadTo(cp, to);
+        break;
+      }
+      case Op::BezierCurveTo: {
+        const SkPoint c1 = mapPt(c.x, c.y);
+        const SkPoint c2 = mapPt(c.w, c.h);
+        const SkPoint to = mapPt(c.a0, c.a1);
+        builder.cubicTo(c1, c2, to);
+        break;
+      }
+      case Op::ArcTo: {
+        const SkPoint p1 = mapPt(c.x, c.y);
+        const SkPoint p2 = mapPt(c.w, c.h);
+        SkScalar radius = c.a0;
+        if (!pmIdentity) {  // scale the radius by the transform's area scale
+          const SkScalar det = pathMatrix.getScaleX() * pathMatrix.getScaleY() -
+                               pathMatrix.getSkewX() * pathMatrix.getSkewY();
+          radius *= std::sqrt(std::fabs(det));
+        }
+        builder.arcTo(p1, p2, radius);
+        break;
+      }
+      case Op::Ellipse: {
+        if (pmIdentity && c.a2 == 0.0f) {
+          addEllipseCore(builder, c.x, c.y, c.w, c.h, c.a0, c.a1, c.ccw);
+        } else {
+          // Build centered + unrotated, then rotate, translate to center, and
+          // apply the instance PathMatrix.
+          SkPathBuilder tmp;
+          addEllipseCore(tmp, 0, 0, c.w, c.h, c.a0, c.a1, c.ccw);
+          SkMatrix m = pathMatrix;  // identity when pmIdentity
+          m.preTranslate(c.x, c.y);
+          m.preRotate((SkScalar)(c.a2 * kRadToDeg));
+          builder.addPath(tmp.snapshot().makeTransform(m));
+        }
+        break;
+      }
+      case Op::RoundRect: {
+        const SkRRect rr =
+            SkRRect::MakeRectXY(rectOf(c), c.a0, c.a0);
+        if (pmIdentity) {
+          builder.addRRect(rr);
+        } else {
+          SkPathBuilder tmp;
+          tmp.addRRect(rr);
+          builder.addPath(tmp.snapshot().makeTransform(pathMatrix));
+        }
+        break;
+      }
 
       case Op::Fill: {
         SkPaint p;
         p.setAntiAlias(true);
         p.setColor((SkColor)c.color);
-        canvas->drawPath(builder.snapshot(), p);
+        SkPath path = builder.snapshot();
+        path.setFillType(c.evenOdd ? SkPathFillType::kEvenOdd
+                                   : SkPathFillType::kWinding);
+        canvas->drawPath(path, p);
         break;
       }
       case Op::Stroke: {
@@ -170,8 +263,18 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setAntiAlias(true);
         p.setStyle(SkPaint::kStroke_Style);
         p.setStrokeWidth(c.lineWidth);
+        p.setStrokeCap((SkPaint::Cap)c.cap);
+        p.setStrokeJoin((SkPaint::Join)c.join);
+        p.setStrokeMiter(c.miterLimit);
         p.setColor((SkColor)c.color);
         canvas->drawPath(builder.snapshot(), p);
+        break;
+      }
+      case Op::Clip: {
+        SkPath path = builder.snapshot();
+        path.setFillType(c.evenOdd ? SkPathFillType::kEvenOdd
+                                   : SkPathFillType::kWinding);
+        canvas->clipPath(path, /*doAntiAlias=*/true);
         break;
       }
 
@@ -189,6 +292,21 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         break;
       case Op::Rotate:
         canvas->rotate((SkScalar)(c.a0 * kRadToDeg));
+        break;
+      case Op::Transform: {
+        SkMatrix m;
+        m.setAll(c.x, c.w, c.a0, c.y, c.h, c.a1, 0, 0, 1);
+        canvas->concat(m);
+        break;
+      }
+      case Op::SetTransform: {
+        SkMatrix m;
+        m.setAll(c.x, c.w, c.a0, c.y, c.h, c.a1, 0, 0, 1);
+        canvas->setMatrix(SkMatrix::Concat(base, m));
+        break;
+      }
+      case Op::ResetTransform:
+        canvas->setMatrix(base);
         break;
     }
   }

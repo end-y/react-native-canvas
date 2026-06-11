@@ -57,6 +57,9 @@ class CanvasContext : public facebook::jsi::HostObject {
   std::string strokeStyleStr_ = "#000000";
   float lineWidth_ = 1.0f;
   float globalAlpha_ = 1.0f;
+  LineCap lineCap_ = LineCap::Butt;
+  LineJoin lineJoin_ = LineJoin::Miter;
+  float miterLimit_ = 10.0f;
 };
 
 }  // namespace rncanvas

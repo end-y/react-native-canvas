@@ -7,6 +7,9 @@ export interface Ctx {
   strokeStyle: string;
   lineWidth: number;
   globalAlpha: number;
+  lineCap: 'butt' | 'round' | 'square';
+  lineJoin: 'miter' | 'round' | 'bevel';
+  miterLimit: number;
 
   // Rects
   clearRect(x: number, y: number, w: number, h: number): void;
@@ -27,8 +30,31 @@ export interface Ctx {
     counterclockwise?: boolean
   ): void;
   rect(x: number, y: number, w: number, h: number): void;
-  fill(): void;
+  quadraticCurveTo(cpx: number, cpy: number, x: number, y: number): void;
+  bezierCurveTo(
+    cp1x: number,
+    cp1y: number,
+    cp2x: number,
+    cp2y: number,
+    x: number,
+    y: number
+  ): void;
+  arcTo(x1: number, y1: number, x2: number, y2: number, radius: number): void;
+  ellipse(
+    x: number,
+    y: number,
+    radiusX: number,
+    radiusY: number,
+    rotation: number,
+    startAngle: number,
+    endAngle: number,
+    counterclockwise?: boolean
+  ): void;
+  // 0.1: uniform corner radius (number) only.
+  roundRect(x: number, y: number, w: number, h: number, radius: number): void;
+  fill(fillRule?: 'nonzero' | 'evenodd'): void;
   stroke(): void;
+  clip(fillRule?: 'nonzero' | 'evenodd'): void;
 
   // --- Non-standard instancing fast path (experimental react-native-canvas
   // extension; NOT part of CanvasRenderingContext2D). ---
@@ -47,6 +73,25 @@ export interface Ctx {
   translate(x: number, y: number): void;
   scale(x: number, y: number): void;
   rotate(angle: number): void;
+  // 2x3 affine (a,b,c,d,e,f). setTransform is relative to the internal DPR base,
+  // so coordinates stay in logical px like the web. (getTransform: not in 0.1.)
+  transform(
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number
+  ): void;
+  setTransform(
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number
+  ): void;
+  resetTransform(): void;
 
   // Flush the batched commands to the view and present (step 3 bridge; the
   // frame loop will call this for you in a later milestone).
@@ -79,6 +124,27 @@ export interface Path2D {
     counterclockwise?: boolean
   ): void;
   rect(x: number, y: number, w: number, h: number): void;
+  quadraticCurveTo(cpx: number, cpy: number, x: number, y: number): void;
+  bezierCurveTo(
+    cp1x: number,
+    cp1y: number,
+    cp2x: number,
+    cp2y: number,
+    x: number,
+    y: number
+  ): void;
+  arcTo(x1: number, y1: number, x2: number, y2: number, radius: number): void;
+  ellipse(
+    x: number,
+    y: number,
+    radiusX: number,
+    radiusY: number,
+    rotation: number,
+    startAngle: number,
+    endAngle: number,
+    counterclockwise?: boolean
+  ): void;
+  roundRect(x: number, y: number, w: number, h: number, radius: number): void;
   closePath(): void;
 }
 

@@ -68,6 +68,52 @@ jsi::Value Path2DHost::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       return jsi::Value::undefined();
     });
   }
+  if (name == "quadraticCurveTo") {
+    return method(4, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::QuadraticCurveTo};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "bezierCurveTo") {
+    return method(6, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::BezierCurveTo};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      c.a0 = num(a, n, 4); c.a1 = num(a, n, 5);
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "arcTo") {
+    return method(5, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::ArcTo};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      c.a0 = num(a, n, 4);  // radius
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "ellipse") {
+    return method(8, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::Ellipse};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      c.a2 = num(a, n, 4);                       // rotation
+      c.a0 = num(a, n, 5); c.a1 = num(a, n, 6);  // start, end
+      c.ccw = (n > 7 && a[7].isBool()) ? a[7].getBool() : false;
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  if (name == "roundRect") {
+    return method(5, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
+      Command c{Op::RoundRect};
+      c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
+      c.a0 = num(a, n, 4);  // uniform corner radius
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
 
   return jsi::Value::undefined();
 }
