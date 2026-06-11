@@ -6,6 +6,7 @@
 
 #include "CanvasGradient.h"
 #include "ColorParser.h"
+#include "FilterParser.h"
 #include "Path2D.h"
 #include "PathHitTest.h"
 
@@ -110,6 +111,7 @@ void CanvasContext::flush() {
   if (flush_) flush_(commands_);
   commands_.clear();
   gradientIndex_.clear();
+  filterIndex_ = -1;
 }
 
 uint32_t CanvasContext::withAlpha(uint32_t color) const {
@@ -127,6 +129,15 @@ int32_t CanvasContext::snapshotGradient(const std::shared_ptr<GradientHost>& g) 
   commands_.gradients.push_back(g->spec());
   gradientIndex_[g.get()] = {g->version(), idx};
   return idx;
+}
+
+void CanvasContext::snapshotFilter(Command& c) {
+  if (filter_.empty()) return;
+  if (filterIndex_ < 0) {
+    filterIndex_ = (int32_t)commands_.filters.size();
+    commands_.filters.push_back(filter_);
+  }
+  c.filter = filterIndex_;
 }
 
 void CanvasContext::snapshotFillStyle(Command& c) {
@@ -180,6 +191,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   if (name == "miterLimit") return jsi::Value((double)miterLimit_);
   if (name == "globalCompositeOperation")
     return jsi::String::createFromUtf8(rt, kBlendNames[(uint8_t)blend_]);
+  if (name == "filter") return jsi::String::createFromUtf8(rt, filterStr_);
   if (name == "shadowColor")
     return jsi::String::createFromUtf8(rt, shadowColorStr_);
   if (name == "shadowBlur") return jsi::Value((double)shadowBlur_);
@@ -217,6 +229,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
       snapshotFillStyle(c); c.blend = (uint8_t)blend_;
       snapshotShadow(c);
+      snapshotFilter(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -229,6 +242,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
       c.blend = (uint8_t)blend_;
       snapshotShadow(c);
+      snapshotFilter(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -333,6 +347,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       Command c{Op::Fill}; snapshotFillStyle(c); c.blend = (uint8_t)blend_;
       c.evenOdd = (n > 0 && a[0].isString() && a[0].asString(rt).utf8(rt) == "evenodd");
       snapshotShadow(c);
+      snapshotFilter(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -344,6 +359,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
       c.blend = (uint8_t)blend_;
       snapshotShadow(c);
+      snapshotFilter(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -452,6 +468,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       }
       Command f{Op::Fill}; snapshotFillStyle(f); f.blend = (uint8_t)blend_;
       snapshotShadow(f);
+      snapshotFilter(f);
       commands_.push_back(f);
       return jsi::Value::undefined();
     });
@@ -618,6 +635,18 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
     if (value.isString()) blendOpFromStr(value.asString(rt).utf8(rt), blend_);
     return;
   }
+  if (name == "filter") {
+    if (value.isString()) {
+      std::string s = value.asString(rt).utf8(rt);
+      FilterSpec spec;
+      if (parseFilter(s, spec)) {  // invalid string leaves the filter unchanged
+        filter_ = std::move(spec);
+        filterStr_ = filter_.empty() ? "none" : s;
+        filterIndex_ = -1;  // next paint op snapshots the new spec
+      }
+    }
+    return;
+  }
   if (name == "shadowColor") {
     if (value.isString()) {
       std::string s = value.asString(rt).utf8(rt);
@@ -660,7 +689,7 @@ std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
   static const char* names[] = {
       "fillStyle", "strokeStyle", "lineWidth", "globalAlpha",
       "lineCap", "lineJoin", "miterLimit", "globalCompositeOperation",
-      "shadowColor", "shadowBlur", "shadowOffsetX", "shadowOffsetY",
+      "shadowColor", "shadowBlur", "shadowOffsetX", "shadowOffsetY", "filter",
       "clearRect", "fillRect", "strokeRect",
       "beginPath", "closePath", "moveTo", "lineTo", "arc", "rect",
       "quadraticCurveTo", "bezierCurveTo", "arcTo", "ellipse", "roundRect",

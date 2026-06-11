@@ -166,6 +166,7 @@ onPress={(e) => {
 - `miterLimit`
 - `globalCompositeOperation` — 26 web modunun tamamı (SkBlendMode'a eşlenir; `source-in/out`, `destination-in/atop`, `copy` tüm-canvas semantiği için saveLayer'dan geçer)
 - Gölge: `shadowColor` / `shadowBlur` / `shadowOffsetX` / `shadowOffsetY` — `SkImageFilters::DropShadow` (sigma = blur/2, Chromium eşlemesi); yalnızca görünür gölgede komuta snapshot'lanır (gölgesiz yol bedava)
+- `filter` — CSS filter listesi: `blur` `brightness` `contrast` `drop-shadow` `grayscale` `hue-rotate` `invert` `opacity` `saturate` `sepia`. Parse C++'ta (`FilterParser`, Skia-free, ColorParser kalıbı); `FilterSpec` gradient gibi CommandList sidecar'ı; renderer soldan sağa `SkImageFilters` zinciri kurar (color-matrix'ler W3C spec). Gölge, FİLTRELENMİŞ sonuca uygulanır (DropShadow zinciri sarar). Geçersiz string yok sayılır (web).
 
 ### Gradient
 - `createLinearGradient(x0,y0,x1,y1)` / `createRadialGradient(x0,y0,r0,x1,y1,r1)` → `CanvasGradient` HostObject (`addColorStop(offset, color)`).
@@ -200,9 +201,8 @@ Binlerce moving primitive için **tek bir** kaçış kapısı. Tasarım ilkesi: 
 - Image (`drawImage`, `useImage`)
 - Pattern (`createPattern` — image'a bağlı)
 - Pixel erişimi (`getImageData`, `putImageData`)
-- `filter` (CSS filtreleri)
 
-> Not: gradient, shadow ve `globalCompositeOperation` başta v2'deydi; Skia rebuild gerektirmedikleri anlaşılınca (semboller mevcut lib'de) 0.1'e alındı (yukarıda).
+> Not: gradient, shadow, `globalCompositeOperation`, `filter`, `isPointInPath`/`isPointInStroke` başta v2'deydi; Skia rebuild gerektirmedikleri anlaşılınca (semboller mevcut lib'de) 0.1'e alındı (yukarıda).
 
 ---
 

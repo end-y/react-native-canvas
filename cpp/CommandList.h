@@ -101,6 +101,32 @@ struct GradientSpec {
   std::vector<GradientStop> stops;  // sorted by pos
 };
 
+// One step of a CSS filter list (ctx.filter), platform-neutral — parsed by
+// FilterParser, mapped to SkImageFilters by the renderer. Args per fn:
+// Blur: a = sigma px (CSS blur length IS the std deviation).
+// Brightness/Contrast/Saturate: a = factor. Grayscale/Sepia/Invert/Opacity:
+// a = amount 0..1. HueRotate: a = degrees.
+// DropShadow: a = dx, b = dy, c = blur radius (σ = c/2), color.
+enum class FilterFn : uint8_t {
+  Blur,
+  Brightness,
+  Contrast,
+  DropShadow,
+  Grayscale,
+  HueRotate,
+  Invert,
+  Opacity,
+  Saturate,
+  Sepia,
+};
+struct FilterStep {
+  FilterFn fn;
+  float a = 0, b = 0, c = 0;
+  uint32_t color = 0xFF000000;  // DropShadow only (ARGB).
+};
+// A parsed filter list, applied left-to-right. Empty = "none".
+using FilterSpec = std::vector<FilterStep>;
+
 // One drawing command. Fields are interpreted per-op (documented inline). Kept
 // as a flat POD (no heap, trivially copyable) so a frame's worth batches cheaply.
 struct Command {
@@ -134,6 +160,9 @@ struct Command {
   // channel (the shader supplies RGB).
   int32_t shader = -1;
 
+  // Paint ops: index into CommandList::filters, or -1 for no filter.
+  int32_t filter = -1;
+
   // Shadow snapshot (paint ops). Inactive when shadowColor's alpha is 0 —
   // the ctx only fills these in when the shadow would actually be visible.
   uint32_t shadowColor = 0;        // ARGB, globalAlpha folded in.
@@ -148,11 +177,13 @@ struct Command {
 struct CommandList {
   std::vector<Command> commands;
   std::vector<GradientSpec> gradients;
+  std::vector<FilterSpec> filters;
 
   void push_back(const Command& c) { commands.push_back(c); }
   void clear() {
     commands.clear();
     gradients.clear();
+    filters.clear();
   }
   void reserve(size_t n) { commands.reserve(n); }
   size_t size() const { return commands.size(); }

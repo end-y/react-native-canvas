@@ -55,6 +55,10 @@ export interface Ctx {
   shadowBlur: number;
   shadowOffsetX: number;
   shadowOffsetY: number;
+  // CSS filter list or 'none'. Supported: blur(px) brightness() contrast()
+  // drop-shadow(dx dy blur? color?) grayscale() hue-rotate() invert()
+  // opacity() saturate() sepia(). Invalid strings are ignored (web behavior).
+  filter: string;
 
   // Rects
   clearRect(x: number, y: number, w: number, h: number): void;

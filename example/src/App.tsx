@@ -17,6 +17,7 @@ import TransformsPage from './pages/TransformsPage';
 import GradientsPage from './pages/GradientsPage';
 import ShadowsPage from './pages/ShadowsPage';
 import CompositePage from './pages/CompositePage';
+import FilterPage from './pages/FilterPage';
 import ClipPage from './pages/ClipPage';
 import HitTestPage from './pages/HitTestPage';
 
@@ -62,6 +63,12 @@ const PAGES = [
     title: 'Composite Ops',
     subtitle: 'globalCompositeOperation — all 26 modes',
     Component: CompositePage,
+  },
+  {
+    key: 'filter',
+    title: 'Filters',
+    subtitle: 'ctx.filter — blur · color matrices · drop-shadow · chains',
+    Component: FilterPage,
   },
   {
     key: 'clip',

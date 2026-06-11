@@ -50,6 +50,11 @@ class CanvasContext : public facebook::jsi::HostObject {
   // would be visible (color alpha > 0 AND blur or offset non-zero).
   void snapshotShadow(Command& c) const;
 
+  // Stamps the current filter (if any) onto a paint command: appends the
+  // parsed FilterSpec to commands_.filters once per frame (filterIndex_
+  // cache) and records the index.
+  void snapshotFilter(Command& c);
+
   // Snapshots the current fill/stroke style into a paint command: a solid
   // color, or a gradient (shader index into commands_.gradients + the
   // globalAlpha snapshot in the color's alpha channel).
@@ -102,6 +107,13 @@ class CanvasContext : public facebook::jsi::HostObject {
   float shadowBlur_ = 0.0f;
   float shadowOffsetX_ = 0.0f;
   float shadowOffsetY_ = 0.0f;
+
+  // CSS filter (ctx.filter). Empty spec = "none". filterIndex_ caches the
+  // spec's index in the CURRENT frame's commands_.filters (-1 = not yet
+  // appended); reset on flush and whenever the filter changes.
+  FilterSpec filter_;
+  std::string filterStr_ = "none";
+  int32_t filterIndex_ = -1;
 
   // Gradient styles (null = the solid fillColor_/strokeColor_ applies).
   std::shared_ptr<GradientHost> fillGradient_;

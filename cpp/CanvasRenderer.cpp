@@ -17,6 +17,7 @@
 #include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
 #include "include/core/SkScalar.h"
+#include "include/core/SkColorFilter.h"
 #include "include/core/SkShader.h"
 #include "include/core/SkTileMode.h"
 #include "include/effects/SkGradient.h"
@@ -108,14 +109,113 @@ void applyStyle(SkPaint& p, const Command& c, const CommandList& list) {
   p.setShader(makeGradientShader(g));
 }
 
-// Attaches the command's shadow (if active) as a DropShadow image filter.
+// Fills `m` (4x5 row-major, translate column in 0..255) with the CSS color
+// matrix for one filter step. Matrices follow the W3C Filter Effects spec.
+void colorMatrixFor(const FilterStep& s, float m[20]) {
+  // Identity.
+  for (int i = 0; i < 20; ++i) m[i] = 0;
+  m[0] = m[6] = m[12] = m[18] = 1;
+
+  switch (s.fn) {
+    case FilterFn::Brightness:
+      m[0] = m[6] = m[12] = s.a;
+      break;
+    case FilterFn::Contrast:
+      m[0] = m[6] = m[12] = s.a;
+      m[4] = m[9] = m[14] = (0.5f - 0.5f * s.a) * 255.0f;
+      break;
+    case FilterFn::Invert:
+      m[0] = m[6] = m[12] = 1.0f - 2.0f * s.a;
+      m[4] = m[9] = m[14] = s.a * 255.0f;
+      break;
+    case FilterFn::Opacity:
+      m[18] = s.a;
+      break;
+    case FilterFn::Grayscale: {
+      const float g = 1.0f - s.a;
+      m[0] = 0.2126f + 0.7874f * g; m[1] = 0.7152f - 0.7152f * g; m[2] = 0.0722f - 0.0722f * g;
+      m[5] = 0.2126f - 0.2126f * g; m[6] = 0.7152f + 0.2848f * g; m[7] = 0.0722f - 0.0722f * g;
+      m[10] = 0.2126f - 0.2126f * g; m[11] = 0.7152f - 0.7152f * g; m[12] = 0.0722f + 0.9278f * g;
+      break;
+    }
+    case FilterFn::Sepia: {
+      const float k = 1.0f - s.a;
+      m[0] = 0.393f + 0.607f * k; m[1] = 0.769f - 0.769f * k; m[2] = 0.189f - 0.189f * k;
+      m[5] = 0.349f - 0.349f * k; m[6] = 0.686f + 0.314f * k; m[7] = 0.168f - 0.168f * k;
+      m[10] = 0.272f - 0.272f * k; m[11] = 0.534f - 0.534f * k; m[12] = 0.131f + 0.869f * k;
+      break;
+    }
+    case FilterFn::Saturate: {
+      const float v = s.a;
+      m[0] = 0.213f + 0.787f * v; m[1] = 0.715f - 0.715f * v; m[2] = 0.072f - 0.072f * v;
+      m[5] = 0.213f - 0.213f * v; m[6] = 0.715f + 0.285f * v; m[7] = 0.072f - 0.072f * v;
+      m[10] = 0.213f - 0.213f * v; m[11] = 0.715f - 0.715f * v; m[12] = 0.072f + 0.928f * v;
+      break;
+    }
+    case FilterFn::HueRotate: {
+      const float rad = (float)(s.a * kPi / 180.0);
+      const float cs = std::cos(rad);
+      const float sn = std::sin(rad);
+      m[0] = 0.213f + cs * 0.787f - sn * 0.213f;
+      m[1] = 0.715f - cs * 0.715f - sn * 0.715f;
+      m[2] = 0.072f - cs * 0.072f + sn * 0.928f;
+      m[5] = 0.213f - cs * 0.213f + sn * 0.143f;
+      m[6] = 0.715f + cs * 0.285f + sn * 0.140f;
+      m[7] = 0.072f - cs * 0.072f - sn * 0.283f;
+      m[10] = 0.213f - cs * 0.213f - sn * 0.787f;
+      m[11] = 0.715f - cs * 0.715f + sn * 0.715f;
+      m[12] = 0.072f + cs * 0.928f + sn * 0.072f;
+      break;
+    }
+    case FilterFn::Blur:
+    case FilterFn::DropShadow:
+      break;  // not color-matrix filters (handled in makeFilterChain)
+  }
+}
+
+// FilterSpec -> SkImageFilter chain, applied left-to-right (each step takes
+// the previous as input). CSS blur length is the Gaussian sigma directly;
+// drop-shadow's blur radius maps to sigma = r/2 (same as canvas shadowBlur).
+sk_sp<SkImageFilter> makeFilterChain(const FilterSpec& steps) {
+  sk_sp<SkImageFilter> chain;  // null input = the source draw
+  for (const FilterStep& s : steps) {
+    switch (s.fn) {
+      case FilterFn::Blur:
+        if (s.a > 0)
+          chain = SkImageFilters::Blur(s.a, s.a, std::move(chain));
+        break;
+      case FilterFn::DropShadow: {
+        const SkScalar sigma = s.c * 0.5f;
+        chain = SkImageFilters::DropShadow(s.a, s.b, sigma, sigma,
+                                           (SkColor)s.color, std::move(chain));
+        break;
+      }
+      default: {
+        float m[20];
+        colorMatrixFor(s, m);
+        chain = SkImageFilters::ColorFilter(SkColorFilters::Matrix(m),
+                                            std::move(chain));
+        break;
+      }
+    }
+  }
+  return chain;
+}
+
+// Attaches the command's filter chain and shadow as the paint's image filter.
+// Order per the canvas spec: the filter applies to the shape, the shadow is
+// cast by the FILTERED result (shadow wraps the chain as its input).
 // Canvas shadowBlur maps to a Gaussian sigma of blur/2 (Chromium's mapping).
-void applyShadow(SkPaint& p, const Command& c) {
-  if ((c.shadowColor >> 24) == 0) return;
-  const SkScalar sigma = c.shadowBlur * 0.5f;
-  p.setImageFilter(SkImageFilters::DropShadow(c.shadowDx, c.shadowDy, sigma,
-                                              sigma, (SkColor)c.shadowColor,
-                                              /*input=*/nullptr));
+void applyEffects(SkPaint& p, const Command& c, const CommandList& list) {
+  sk_sp<SkImageFilter> f;
+  if (c.filter >= 0 && (size_t)c.filter < list.filters.size())
+    f = makeFilterChain(list.filters[(size_t)c.filter]);
+  if (c.shadowColor >> 24) {
+    const SkScalar sigma = c.shadowBlur * 0.5f;
+    f = SkImageFilters::DropShadow(c.shadowDx, c.shadowDy, sigma, sigma,
+                                   (SkColor)c.shadowColor, std::move(f));
+  }
+  if (f) p.setImageFilter(std::move(f));
 }
 
 // Web semantics for these modes affect the WHOLE canvas (pixels the shape
@@ -409,7 +509,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         SkPaint p;
         p.setAntiAlias(true);
         applyStyle(p, c, commands);
-        applyShadow(p, c);
+        applyEffects(p, c, commands);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
         break;
       }
@@ -422,7 +522,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setStrokeJoin((SkPaint::Join)c.join);
         p.setStrokeMiter(c.miterLimit);
         applyStyle(p, c, commands);
-        applyShadow(p, c);
+        applyEffects(p, c, commands);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
         break;
       }
@@ -434,7 +534,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         SkPath path = builder.snapshot();
         path.setFillType(c.evenOdd ? SkPathFillType::kEvenOdd
                                    : SkPathFillType::kWinding);
-        applyShadow(p, c);
+        applyEffects(p, c, commands);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawPath(path, pp); });
         break;
       }
@@ -447,7 +547,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setStrokeJoin((SkPaint::Join)c.join);
         p.setStrokeMiter(c.miterLimit);
         applyStyle(p, c, commands);
-        applyShadow(p, c);
+        applyEffects(p, c, commands);
         drawComposited(c, p,
                        [&](const SkPaint& pp) { canvas->drawPath(builder.snapshot(), pp); });
         break;
