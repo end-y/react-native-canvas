@@ -25,6 +25,58 @@ constexpr double kRadToDeg = 180.0 / kPi;
 
 SkRect rectOf(const Command& c) { return SkRect::MakeXYWH(c.x, c.y, c.w, c.h); }
 
+// BlendOp (web globalCompositeOperation) -> SkBlendMode. Same order as the
+// kBlendNames table in CanvasContext.cpp.
+SkBlendMode toSkBlend(uint8_t b) {
+  switch ((BlendOp)b) {
+    case BlendOp::SourceOver: return SkBlendMode::kSrcOver;
+    case BlendOp::SourceIn: return SkBlendMode::kSrcIn;
+    case BlendOp::SourceOut: return SkBlendMode::kSrcOut;
+    case BlendOp::SourceAtop: return SkBlendMode::kSrcATop;
+    case BlendOp::DestinationOver: return SkBlendMode::kDstOver;
+    case BlendOp::DestinationIn: return SkBlendMode::kDstIn;
+    case BlendOp::DestinationOut: return SkBlendMode::kDstOut;
+    case BlendOp::DestinationAtop: return SkBlendMode::kDstATop;
+    case BlendOp::Lighter: return SkBlendMode::kPlus;
+    case BlendOp::Copy: return SkBlendMode::kSrc;
+    case BlendOp::Xor: return SkBlendMode::kXor;
+    case BlendOp::Multiply: return SkBlendMode::kMultiply;
+    case BlendOp::Screen: return SkBlendMode::kScreen;
+    case BlendOp::Overlay: return SkBlendMode::kOverlay;
+    case BlendOp::Darken: return SkBlendMode::kDarken;
+    case BlendOp::Lighten: return SkBlendMode::kLighten;
+    case BlendOp::ColorDodge: return SkBlendMode::kColorDodge;
+    case BlendOp::ColorBurn: return SkBlendMode::kColorBurn;
+    case BlendOp::HardLight: return SkBlendMode::kHardLight;
+    case BlendOp::SoftLight: return SkBlendMode::kSoftLight;
+    case BlendOp::Difference: return SkBlendMode::kDifference;
+    case BlendOp::Exclusion: return SkBlendMode::kExclusion;
+    case BlendOp::Hue: return SkBlendMode::kHue;
+    case BlendOp::Saturation: return SkBlendMode::kSaturation;
+    case BlendOp::Color: return SkBlendMode::kColor;
+    case BlendOp::Luminosity: return SkBlendMode::kLuminosity;
+  }
+  return SkBlendMode::kSrcOver;
+}
+
+// Web semantics for these modes affect the WHOLE canvas (pixels the shape
+// doesn't cover get cleared/kept by the dest factor), but a plain draw only
+// touches the shape's coverage. They need the draw routed through a
+// transparent layer composited onto the canvas with the mode (Chromium's
+// "full canvas composite" set + copy).
+bool blendNeedsLayer(uint8_t b) {
+  switch ((BlendOp)b) {
+    case BlendOp::SourceIn:
+    case BlendOp::SourceOut:
+    case BlendOp::DestinationIn:
+    case BlendOp::DestinationAtop:
+    case BlendOp::Copy:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Appends a canvas-spec arc (center cx/cy, radius r, angles start..end) to
 // `builder`. Mirrors HTMLCanvas arc() angle handling (clockwise unless ccw),
 // connecting from the current point per spec.
@@ -128,6 +180,22 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
     return pmIdentity ? SkPoint{x, y} : pathMatrix.mapPoint({x, y});
   };
 
+  // Runs `draw(paint)` honoring the command's composite op. Most modes map 1:1
+  // onto the paint's blend mode; the full-canvas modes go through saveLayer
+  // (draw src-over into a transparent layer, composite the layer with the mode).
+  auto drawComposited = [&](const Command& c, SkPaint& p, auto&& draw) {
+    if (!blendNeedsLayer(c.blend)) {
+      p.setBlendMode(toSkBlend(c.blend));
+      draw(p);
+      return;
+    }
+    SkPaint layerPaint;
+    layerPaint.setBlendMode(toSkBlend(c.blend));
+    canvas->saveLayer(nullptr, &layerPaint);
+    draw(p);
+    canvas->restore();
+  };
+
   for (const Command& c : commands) {
     switch (c.op) {
       case Op::ClearRect: {
@@ -140,7 +208,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         SkPaint p;
         p.setAntiAlias(true);
         p.setColor((SkColor)c.color);
-        canvas->drawRect(rectOf(c), p);
+        drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
         break;
       }
       case Op::StrokeRect: {
@@ -148,8 +216,11 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setAntiAlias(true);
         p.setStyle(SkPaint::kStroke_Style);
         p.setStrokeWidth(c.lineWidth);
+        p.setStrokeCap((SkPaint::Cap)c.cap);
+        p.setStrokeJoin((SkPaint::Join)c.join);
+        p.setStrokeMiter(c.miterLimit);
         p.setColor((SkColor)c.color);
-        canvas->drawRect(rectOf(c), p);
+        drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
         break;
       }
 
@@ -255,7 +326,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         SkPath path = builder.snapshot();
         path.setFillType(c.evenOdd ? SkPathFillType::kEvenOdd
                                    : SkPathFillType::kWinding);
-        canvas->drawPath(path, p);
+        drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawPath(path, pp); });
         break;
       }
       case Op::Stroke: {
@@ -267,7 +338,8 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setStrokeJoin((SkPaint::Join)c.join);
         p.setStrokeMiter(c.miterLimit);
         p.setColor((SkColor)c.color);
-        canvas->drawPath(builder.snapshot(), p);
+        drawComposited(c, p,
+                       [&](const SkPaint& pp) { canvas->drawPath(builder.snapshot(), pp); });
         break;
       }
       case Op::Clip: {

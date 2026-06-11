@@ -60,6 +60,28 @@ const char* lineJoinStr(LineJoin j) {
   }
 }
 
+// globalCompositeOperation names <-> BlendOp, in enum order (HTML spec names).
+constexpr const char* kBlendNames[] = {
+    "source-over",      "source-in",      "source-out",  "source-atop",
+    "destination-over", "destination-in", "destination-out",
+    "destination-atop", "lighter",        "copy",        "xor",
+    "multiply",         "screen",         "overlay",     "darken",
+    "lighten",          "color-dodge",    "color-burn",  "hard-light",
+    "soft-light",       "difference",     "exclusion",   "hue",
+    "saturation",       "color",          "luminosity",
+};
+constexpr size_t kBlendCount = sizeof(kBlendNames) / sizeof(kBlendNames[0]);
+
+bool blendOpFromStr(const std::string& s, BlendOp& out) {
+  for (size_t i = 0; i < kBlendCount; ++i) {
+    if (s == kBlendNames[i]) {
+      out = (BlendOp)i;
+      return true;
+    }
+  }
+  return false;
+}
+
 // Reads data[name] as a per-instance float source: a number (constant), a
 // Float32Array (per-instance), or absent (valid=false). Pointer stays valid for
 // the host call (the array is reachable via `data`).
@@ -107,6 +129,8 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   if (name == "lineCap") return jsi::String::createFromUtf8(rt, lineCapStr(lineCap_));
   if (name == "lineJoin") return jsi::String::createFromUtf8(rt, lineJoinStr(lineJoin_));
   if (name == "miterLimit") return jsi::Value((double)miterLimit_);
+  if (name == "globalCompositeOperation")
+    return jsi::String::createFromUtf8(rt, kBlendNames[(uint8_t)blend_]);
 
   // --- Methods: built once, then cached (see methodCache_). Fast path first, so
   // a hot call like ctx.arc(...) never rebuilds the function or its lambda. ---
@@ -137,7 +161,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     return method(4, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::FillRect};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
-      c.color = withAlpha(fillColor_);
+      c.color = withAlpha(fillColor_); c.blend = (uint8_t)blend_;
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -148,6 +172,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
       c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
       c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
+      c.blend = (uint8_t)blend_;
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -248,7 +273,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   // Path painting -----------------------------------------------------------
   if (name == "fill") {
     return method(1, [this](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
-      Command c{Op::Fill}; c.color = withAlpha(fillColor_);
+      Command c{Op::Fill}; c.color = withAlpha(fillColor_); c.blend = (uint8_t)blend_;
       c.evenOdd = (n > 0 && a[0].isString() && a[0].asString(rt).utf8(rt) == "evenodd");
       commands_.push_back(c);
       return jsi::Value::undefined();
@@ -259,6 +284,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       Command c{Op::Stroke};
       c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
       c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
+      c.blend = (uint8_t)blend_;
       commands_.push_back(c);
       return jsi::Value::undefined();
     });
@@ -330,7 +356,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
         commands_.push_back(m);
         for (const Command& tc : tcmds) commands_.push_back(tc);
       }
-      Command f{Op::Fill}; f.color = col;
+      Command f{Op::Fill}; f.color = col; f.blend = (uint8_t)blend_;
       commands_.push_back(f);
       return jsi::Value::undefined();
     });
@@ -456,6 +482,11 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
     if (value.isNumber() && value.asNumber() > 0) miterLimit_ = (float)value.asNumber();
     return;
   }
+  if (name == "globalCompositeOperation") {
+    // Unknown values leave the state unchanged, like the web.
+    if (value.isString()) blendOpFromStr(value.asString(rt).utf8(rt), blend_);
+    return;
+  }
   if (name == "globalAlpha") {
     if (value.isNumber()) {
       double a = value.asNumber();
@@ -469,7 +500,7 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
 std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
   static const char* names[] = {
       "fillStyle", "strokeStyle", "lineWidth", "globalAlpha",
-      "lineCap", "lineJoin", "miterLimit",
+      "lineCap", "lineJoin", "miterLimit", "globalCompositeOperation",
       "clearRect", "fillRect", "strokeRect",
       "beginPath", "closePath", "moveTo", "lineTo", "arc", "rect",
       "quadraticCurveTo", "bezierCurveTo", "arcTo", "ellipse", "roundRect",

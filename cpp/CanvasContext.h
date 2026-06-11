@@ -60,6 +60,7 @@ class CanvasContext : public facebook::jsi::HostObject {
   LineCap lineCap_ = LineCap::Butt;
   LineJoin lineJoin_ = LineJoin::Miter;
   float miterLimit_ = 10.0f;
+  BlendOp blend_ = BlendOp::SourceOver;
 };
 
 }  // namespace rncanvas

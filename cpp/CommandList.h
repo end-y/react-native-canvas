@@ -53,6 +53,37 @@ enum class Op : uint8_t {
 enum class LineCap : uint8_t { Butt = 0, Round = 1, Square = 2 };
 enum class LineJoin : uint8_t { Miter = 0, Round = 1, Bevel = 2 };
 
+// globalCompositeOperation, platform-neutral (renderer maps to SkBlendMode).
+// Order mirrors the HTML spec listing; SourceOver=0 keeps the Command default.
+enum class BlendOp : uint8_t {
+  SourceOver = 0,
+  SourceIn,
+  SourceOut,
+  SourceAtop,
+  DestinationOver,
+  DestinationIn,
+  DestinationOut,
+  DestinationAtop,
+  Lighter,
+  Copy,
+  Xor,
+  Multiply,
+  Screen,
+  Overlay,
+  Darken,
+  Lighten,
+  ColorDodge,
+  ColorBurn,
+  HardLight,
+  SoftLight,
+  Difference,
+  Exclusion,
+  Hue,
+  Saturation,
+  Color,
+  Luminosity,
+};
+
 // One drawing command. Fields are interpreted per-op (documented inline). Kept
 // as a flat POD (no heap, trivially copyable) so a frame's worth batches cheaply.
 struct Command {
@@ -77,6 +108,7 @@ struct Command {
   float miterLimit = 10.0f;        // Stroke / StrokeRect only.
   uint8_t cap = 0;                 // Stroke / StrokeRect (LineCap).
   uint8_t join = 0;                // Stroke / StrokeRect (LineJoin).
+  uint8_t blend = 0;               // Paint ops (BlendOp; 0 = source-over).
   bool ccw = false;                // Arc / Ellipse only.
   bool evenOdd = false;            // Fill / Clip fill-rule.
 };

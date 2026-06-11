@@ -1,3 +1,32 @@
+// Web globalCompositeOperation values (all 26 are supported natively).
+export type GlobalCompositeOperation =
+  | 'source-over'
+  | 'source-in'
+  | 'source-out'
+  | 'source-atop'
+  | 'destination-over'
+  | 'destination-in'
+  | 'destination-out'
+  | 'destination-atop'
+  | 'lighter'
+  | 'copy'
+  | 'xor'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
+  | 'color-burn'
+  | 'hard-light'
+  | 'soft-light'
+  | 'difference'
+  | 'exclusion'
+  | 'hue'
+  | 'saturation'
+  | 'color'
+  | 'luminosity';
+
 // The imperative drawing surface handed to user code. A subset of the web
 // CanvasRenderingContext2D (DESIGN §4), backed by a C++ JSI HostObject
 // (cpp/CanvasContext). Methods are faithful to the HTML5 names.
@@ -10,6 +39,7 @@ export interface Ctx {
   lineCap: 'butt' | 'round' | 'square';
   lineJoin: 'miter' | 'round' | 'bevel';
   miterLimit: number;
+  globalCompositeOperation: GlobalCompositeOperation;
 
   // Rects
   clearRect(x: number, y: number, w: number, h: number): void;
