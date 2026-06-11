@@ -27,13 +27,22 @@ export type GlobalCompositeOperation =
   | 'color'
   | 'luminosity';
 
+// Returned by ctx.createLinearGradient / createRadialGradient (a C++
+// HostObject). Assign to fillStyle/strokeStyle. Stops added after a draw call
+// do not affect that draw (snapshot semantics, like the web). Note: reading
+// ctx.fillStyle back returns a NEW wrapper around the same native gradient,
+// so `ctx.fillStyle === g` is false.
+export interface CanvasGradient {
+  addColorStop(offset: number, color: string): void;
+}
+
 // The imperative drawing surface handed to user code. A subset of the web
 // CanvasRenderingContext2D (DESIGN §4), backed by a C++ JSI HostObject
 // (cpp/CanvasContext). Methods are faithful to the HTML5 names.
 export interface Ctx {
-  // Styles (plain colors only in 0.1)
-  fillStyle: string;
-  strokeStyle: string;
+  // Styles (solid color string or gradient)
+  fillStyle: string | CanvasGradient;
+  strokeStyle: string | CanvasGradient;
   lineWidth: number;
   globalAlpha: number;
   lineCap: 'butt' | 'round' | 'square';
@@ -128,6 +137,22 @@ export interface Ctx {
     f: number
   ): void;
   resetTransform(): void;
+
+  // Gradients
+  createLinearGradient(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number
+  ): CanvasGradient;
+  createRadialGradient(
+    x0: number,
+    y0: number,
+    r0: number,
+    x1: number,
+    y1: number,
+    r1: number
+  ): CanvasGradient;
 
   // Flush the batched commands to the view and present (step 3 bridge; the
   // frame loop will call this for you in a later milestone).

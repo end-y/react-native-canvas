@@ -14,6 +14,9 @@
 #include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
 #include "include/core/SkScalar.h"
+#include "include/core/SkShader.h"
+#include "include/core/SkTileMode.h"
+#include "include/effects/SkGradient.h"
 #include "include/effects/SkImageFilters.h"
 
 namespace rncanvas {
@@ -58,6 +61,48 @@ SkBlendMode toSkBlend(uint8_t b) {
     case BlendOp::Luminosity: return SkBlendMode::kLuminosity;
   }
   return SkBlendMode::kSrcOver;
+}
+
+// GradientSpec -> SkShader. Stops are pre-sorted (GradientHost keeps them so);
+// kClamp matches web gradient edge behavior. A single stop renders as a solid
+// color (web), expressed as two identical stops.
+sk_sp<SkShader> makeGradientShader(const GradientSpec& g) {
+  std::vector<SkColor4f> colors;
+  std::vector<float> pos;
+  colors.reserve(g.stops.size() + 1);
+  pos.reserve(g.stops.size() + 1);
+  for (const GradientStop& s : g.stops) {
+    colors.push_back(SkColor4f::FromColor((SkColor)s.color));
+    pos.push_back(s.pos);
+  }
+  if (colors.size() == 1) {
+    colors.push_back(colors[0]);
+    pos = {0.0f, 1.0f};
+  }
+  const SkGradient grad(
+      SkGradient::Colors({colors.data(), colors.size()},
+                         {pos.data(), pos.size()}, SkTileMode::kClamp),
+      {});
+  if (!g.radial) {
+    const SkPoint pts[2] = {{g.x0, g.y0}, {g.x1, g.y1}};
+    return SkShaders::LinearGradient(pts, grad);
+  }
+  return SkShaders::TwoPointConicalGradient({g.x0, g.y0}, g.r0, {g.x1, g.y1},
+                                            g.r1, grad);
+}
+
+// Applies the command's style: solid color, or gradient shader (paint alpha —
+// the globalAlpha snapshot in c.color — modulates the shader). A gradient with
+// zero stops paints transparent black per the web spec.
+void applyStyle(SkPaint& p, const Command& c, const CommandList& list) {
+  p.setColor((SkColor)c.color);
+  if (c.shader < 0 || (size_t)c.shader >= list.gradients.size()) return;
+  const GradientSpec& g = list.gradients[(size_t)c.shader];
+  if (g.stops.empty()) {
+    p.setColor(SK_ColorTRANSPARENT);
+    return;
+  }
+  p.setShader(makeGradientShader(g));
 }
 
 // Attaches the command's shadow (if active) as a DropShadow image filter.
@@ -218,7 +263,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
       case Op::FillRect: {
         SkPaint p;
         p.setAntiAlias(true);
-        p.setColor((SkColor)c.color);
+        applyStyle(p, c, commands);
         applyShadow(p, c);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
         break;
@@ -231,7 +276,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setStrokeCap((SkPaint::Cap)c.cap);
         p.setStrokeJoin((SkPaint::Join)c.join);
         p.setStrokeMiter(c.miterLimit);
-        p.setColor((SkColor)c.color);
+        applyStyle(p, c, commands);
         applyShadow(p, c);
         drawComposited(c, p, [&](const SkPaint& pp) { canvas->drawRect(rectOf(c), pp); });
         break;
@@ -335,7 +380,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
       case Op::Fill: {
         SkPaint p;
         p.setAntiAlias(true);
-        p.setColor((SkColor)c.color);
+        applyStyle(p, c, commands);
         SkPath path = builder.snapshot();
         path.setFillType(c.evenOdd ? SkPathFillType::kEvenOdd
                                    : SkPathFillType::kWinding);
@@ -351,7 +396,7 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         p.setStrokeCap((SkPaint::Cap)c.cap);
         p.setStrokeJoin((SkPaint::Join)c.join);
         p.setStrokeMiter(c.miterLimit);
-        p.setColor((SkColor)c.color);
+        applyStyle(p, c, commands);
         applyShadow(p, c);
         drawComposited(c, p,
                        [&](const SkPaint& pp) { canvas->drawPath(builder.snapshot(), pp); });

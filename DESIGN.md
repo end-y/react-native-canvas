@@ -157,13 +157,20 @@ onPress={(e) => {
   — `setTransform` içsel DPR tabanına göredir, böylece koordinatlar web gibi logical px kalır.
 
 ### Stiller (property)
-- `fillStyle` (düz renk)
-- `strokeStyle` (düz renk)
+- `fillStyle` (düz renk **veya** `CanvasGradient`)
+- `strokeStyle` (düz renk **veya** `CanvasGradient`)
 - `lineWidth`
 - `globalAlpha`
 - `lineCap` (`"butt"` | `"round"` | `"square"`)
 - `lineJoin` (`"miter"` | `"round"` | `"bevel"`)
 - `miterLimit`
+- `globalCompositeOperation` — 26 web modunun tamamı (SkBlendMode'a eşlenir; `source-in/out`, `destination-in/atop`, `copy` tüm-canvas semantiği için saveLayer'dan geçer)
+- Gölge: `shadowColor` / `shadowBlur` / `shadowOffsetX` / `shadowOffsetY` — `SkImageFilters::DropShadow` (sigma = blur/2, Chromium eşlemesi); yalnızca görünür gölgede komuta snapshot'lanır (gölgesiz yol bedava)
+
+### Gradient
+- `createLinearGradient(x0,y0,x1,y1)` / `createRadialGradient(x0,y0,r0,x1,y1,r1)` → `CanvasGradient` HostObject (`addColorStop(offset, color)`).
+- ctx katmanı Skia-free kalır: `GradientSpec` (saf veri) paint anında frame'in `CommandList.gradients`'ine **snapshot**'lanır (sonradan eklenen stop önceki çizimi etkilemez); `Command.shader` index'i ile referans. Renderer `SkShaders::LinearGradient` / `TwoPointConicalGradient` üretir.
+- `CommandList` artık struct: `{commands, gradients}` (vector-benzeri forwarding ile eski kullanım aynen derlenir).
 
 ### Renk parse (C++)
 - Hex: `#rgb`, `#rrggbb`, `#rrggbbaa`
@@ -191,10 +198,11 @@ Binlerce moving primitive için **tek bir** kaçış kapısı. Tasarım ilkesi: 
 ### 0.1'de KESİNLİKLE YOK (→ v2)
 - Text / font (`fillText`, `measureText`, `font`, `textAlign`...)
 - Image (`drawImage`, `useImage`)
-- Gradient / pattern
-- Shadow
+- Pattern (`createPattern` — image'a bağlı)
 - Pixel erişimi (`getImageData`, `putImageData`)
-- `globalCompositeOperation`, filtreler
+- `filter` (CSS filtreleri)
+
+> Not: gradient, shadow ve `globalCompositeOperation` başta v2'deydi; Skia rebuild gerektirmedikleri anlaşılınca (semboller mevcut lib'de) 0.1'e alındı (yukarıda).
 
 ---
 
@@ -369,7 +377,7 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 - **Text / font:** `font` shorthand parse + `fillText`/`strokeText` (tek satır) + `measureText` + `textAlign`/`textBaseline`. Sistem fontları + opsiyonel `.ttf` yükleme.
 - **Image:** `useImage(source)` (require / URI / base64) + `drawImage` overload'ları.
 - **Sürükleme event'leri:** `onTouchStart` / `onTouchMove` / `onTouchEnd` (aynı koordinat altyapısı).
-- **Gradient / pattern**, **shadow** (paint soyutlaması buna hazır olacak).
+- **Pattern** (`createPattern`, image'a bağlı). ~~Gradient~~ ✅ ve ~~shadow~~ ✅ 0.1'e alındı (§4).
 - **Worklet runtime:** çizimi ayrı thread'e taşıma (Reanimated'e yaslanma vs. kendi runtime — o zaman karar verilecek). `ctx` HostObject'i worklet runtime'ına kurma gereği not edildi.
 - Olası: `getImageData`/`putImageData`, `globalCompositeOperation`, `clip`, `toDataURL`.
 

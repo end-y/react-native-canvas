@@ -9,13 +9,18 @@
 
 #include <jsi/jsi.h>
 
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include "CommandList.h"
 
 namespace rncanvas {
+
+class GradientHost;
 
 class CanvasContext : public facebook::jsi::HostObject {
  public:
@@ -45,6 +50,17 @@ class CanvasContext : public facebook::jsi::HostObject {
   // would be visible (color alpha > 0 AND blur or offset non-zero).
   void snapshotShadow(Command& c) const;
 
+  // Snapshots the current fill/stroke style into a paint command: a solid
+  // color, or a gradient (shader index into commands_.gradients + the
+  // globalAlpha snapshot in the color's alpha channel).
+  void snapshotFillStyle(Command& c);
+  void snapshotStrokeStyle(Command& c);
+
+  // Appends a copy of the gradient's spec to commands_.gradients (canvas
+  // snapshot semantics: later addColorStop must not affect earlier draws) and
+  // returns its index. Deduped per frame by (host, version).
+  int32_t snapshotGradient(const std::shared_ptr<GradientHost>& g);
+
   FlushFn flush_;
   CommandList commands_;
 
@@ -72,6 +88,13 @@ class CanvasContext : public facebook::jsi::HostObject {
   float shadowBlur_ = 0.0f;
   float shadowOffsetX_ = 0.0f;
   float shadowOffsetY_ = 0.0f;
+
+  // Gradient styles (null = the solid fillColor_/strokeColor_ applies).
+  std::shared_ptr<GradientHost> fillGradient_;
+  std::shared_ptr<GradientHost> strokeGradient_;
+  // Per-frame snapshot dedupe: host -> (version, index into
+  // commands_.gradients). Cleared on flush.
+  std::unordered_map<GradientHost*, std::pair<uint64_t, int32_t>> gradientIndex_;
 };
 
 }  // namespace rncanvas

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <memory>
 
+#include "CanvasGradient.h"
 #include "ColorParser.h"
 #include "Path2D.h"
 
@@ -107,6 +108,7 @@ FloatSrc readFloat(jsi::Runtime& rt, jsi::Object& data, const char* name) {
 void CanvasContext::flush() {
   if (flush_) flush_(commands_);
   commands_.clear();
+  gradientIndex_.clear();
 }
 
 uint32_t CanvasContext::withAlpha(uint32_t color) const {
@@ -114,6 +116,34 @@ uint32_t CanvasContext::withAlpha(uint32_t color) const {
   a = (uint32_t)std::lround(a * globalAlpha_);
   if (a > 255) a = 255;
   return (a << 24) | (color & 0x00FFFFFF);
+}
+
+int32_t CanvasContext::snapshotGradient(const std::shared_ptr<GradientHost>& g) {
+  auto it = gradientIndex_.find(g.get());
+  if (it != gradientIndex_.end() && it->second.first == g->version())
+    return it->second.second;
+  const int32_t idx = (int32_t)commands_.gradients.size();
+  commands_.gradients.push_back(g->spec());
+  gradientIndex_[g.get()] = {g->version(), idx};
+  return idx;
+}
+
+void CanvasContext::snapshotFillStyle(Command& c) {
+  if (fillGradient_) {
+    c.shader = snapshotGradient(fillGradient_);
+    c.color = withAlpha(0xFFFFFFFF);  // alpha-only; the shader supplies RGB
+  } else {
+    c.color = withAlpha(fillColor_);
+  }
+}
+
+void CanvasContext::snapshotStrokeStyle(Command& c) {
+  if (strokeGradient_) {
+    c.shader = snapshotGradient(strokeGradient_);
+    c.color = withAlpha(0xFFFFFFFF);
+  } else {
+    c.color = withAlpha(strokeColor_);
+  }
 }
 
 void CanvasContext::snapshotShadow(Command& c) const {
@@ -130,10 +160,18 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   std::string name = nameId.utf8(rt);
 
   // --- Properties (read current state) ---
-  if (name == "fillStyle")
+  // With a gradient style, returns a (new) wrapper around the same native
+  // gradient — note `ctx.fillStyle === g` is false even right after assignment.
+  if (name == "fillStyle") {
+    if (fillGradient_)
+      return jsi::Object::createFromHostObject(rt, fillGradient_);
     return jsi::String::createFromUtf8(rt, fillStyleStr_);
-  if (name == "strokeStyle")
+  }
+  if (name == "strokeStyle") {
+    if (strokeGradient_)
+      return jsi::Object::createFromHostObject(rt, strokeGradient_);
     return jsi::String::createFromUtf8(rt, strokeStyleStr_);
+  }
   if (name == "lineWidth") return jsi::Value((double)lineWidth_);
   if (name == "globalAlpha") return jsi::Value((double)globalAlpha_);
   if (name == "lineCap") return jsi::String::createFromUtf8(rt, lineCapStr(lineCap_));
@@ -176,7 +214,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     return method(4, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::FillRect};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
-      c.color = withAlpha(fillColor_); c.blend = (uint8_t)blend_;
+      snapshotFillStyle(c); c.blend = (uint8_t)blend_;
       snapshotShadow(c);
       commands_.push_back(c);
       return jsi::Value::undefined();
@@ -186,7 +224,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     return method(4, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t n) {
       Command c{Op::StrokeRect};
       c.x = num(a, n, 0); c.y = num(a, n, 1); c.w = num(a, n, 2); c.h = num(a, n, 3);
-      c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
+      snapshotStrokeStyle(c); c.lineWidth = lineWidth_;
       c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
       c.blend = (uint8_t)blend_;
       snapshotShadow(c);
@@ -290,7 +328,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   // Path painting -----------------------------------------------------------
   if (name == "fill") {
     return method(1, [this](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
-      Command c{Op::Fill}; c.color = withAlpha(fillColor_); c.blend = (uint8_t)blend_;
+      Command c{Op::Fill}; snapshotFillStyle(c); c.blend = (uint8_t)blend_;
       c.evenOdd = (n > 0 && a[0].isString() && a[0].asString(rt).utf8(rt) == "evenodd");
       snapshotShadow(c);
       commands_.push_back(c);
@@ -300,7 +338,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   if (name == "stroke") {
     return method(0, [this](jsi::Runtime&, const jsi::Value&, const jsi::Value*, size_t) {
       Command c{Op::Stroke};
-      c.color = withAlpha(strokeColor_); c.lineWidth = lineWidth_;
+      snapshotStrokeStyle(c); c.lineWidth = lineWidth_;
       c.cap = (uint8_t)lineCap_; c.join = (uint8_t)lineJoin_; c.miterLimit = miterLimit_;
       c.blend = (uint8_t)blend_;
       snapshotShadow(c);
@@ -354,7 +392,6 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       if (!sy.valid) sy = s.valid ? s : FloatSrc{nullptr, 1.0f, 0, true};
       const FloatSrc rot = readFloat(rt, data, "rotation");
 
-      const uint32_t col = withAlpha(fillColor_);
       // BeginPath + count*(PathMatrix + template) + Fill.
       commands_.reserve(commands_.size() + 2 + count * (1 + tcmds.size()));
       commands_.push_back(Command{Op::BeginPath});
@@ -375,7 +412,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
         commands_.push_back(m);
         for (const Command& tc : tcmds) commands_.push_back(tc);
       }
-      Command f{Op::Fill}; f.color = col; f.blend = (uint8_t)blend_;
+      Command f{Op::Fill}; snapshotFillStyle(f); f.blend = (uint8_t)blend_;
       snapshotShadow(f);
       commands_.push_back(f);
       return jsi::Value::undefined();
@@ -437,6 +474,28 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     });
   }
 
+  // Gradients ----------------------------------------------------------------
+  // Both return a CanvasGradient HostObject; assign to fillStyle/strokeStyle.
+  if (name == "createLinearGradient") {
+    return method(4, [](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
+      GradientSpec s;
+      s.x0 = num(a, n, 0); s.y0 = num(a, n, 1);
+      s.x1 = num(a, n, 2); s.y1 = num(a, n, 3);
+      return jsi::Value(rt, jsi::Object::createFromHostObject(
+                                rt, std::make_shared<GradientHost>(std::move(s))));
+    });
+  }
+  if (name == "createRadialGradient") {
+    return method(6, [](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* a, size_t n) {
+      GradientSpec s;
+      s.radial = true;
+      s.x0 = num(a, n, 0); s.y0 = num(a, n, 1); s.r0 = num(a, n, 2);
+      s.x1 = num(a, n, 3); s.y1 = num(a, n, 4); s.r1 = num(a, n, 5);
+      return jsi::Value(rt, jsi::Object::createFromHostObject(
+                                rt, std::make_shared<GradientHost>(std::move(s))));
+    });
+  }
+
   // Flush ------------------------------------------------------------------
   // Not standard canvas; the bridge for step 3 (frame loop will call flush
   // automatically later). Renders the batched commands and clears the list.
@@ -461,6 +520,13 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
       if (parseColor(s, c)) {  // ignore unparseable, like the web
         fillColor_ = c;
         fillStyleStr_ = s;
+        fillGradient_.reset();
+      }
+    } else if (value.isObject()) {
+      jsi::Object o = value.getObject(rt);
+      if (o.isHostObject(rt)) {
+        if (auto g = std::dynamic_pointer_cast<GradientHost>(o.getHostObject(rt)))
+          fillGradient_ = std::move(g);
       }
     }
     return;
@@ -472,6 +538,13 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
       if (parseColor(s, c)) {
         strokeColor_ = c;
         strokeStyleStr_ = s;
+        strokeGradient_.reset();
+      }
+    } else if (value.isObject()) {
+      jsi::Object o = value.getObject(rt);
+      if (o.isHostObject(rt)) {
+        if (auto g = std::dynamic_pointer_cast<GradientHost>(o.getHostObject(rt)))
+          strokeGradient_ = std::move(g);
       }
     }
     return;
@@ -556,6 +629,7 @@ std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
       "fill", "stroke", "clip", "fillInstances",
       "save", "restore", "translate", "scale", "rotate",
       "transform", "setTransform", "resetTransform",
+      "createLinearGradient", "createRadialGradient",
       "present",
   };
   std::vector<jsi::PropNameID> out;

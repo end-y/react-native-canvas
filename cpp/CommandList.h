@@ -6,6 +6,7 @@
 // fillStyle is read when fill()/fillRect() is called, not later.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -84,6 +85,22 @@ enum class BlendOp : uint8_t {
   Luminosity,
 };
 
+// A gradient fill/stroke style, platform-neutral (the renderer maps it to an
+// SkShader). Snapshotted into CommandList::gradients at paint time; Commands
+// reference it by index so the Command itself stays a flat POD.
+struct GradientStop {
+  float pos;       // 0..1
+  uint32_t color;  // ARGB
+};
+struct GradientSpec {
+  bool radial = false;
+  // Linear: (x0,y0) -> (x1,y1). Radial: start circle (x0,y0,r0), end (x1,y1,r1)
+  // — the two-circle form of createRadialGradient.
+  float x0 = 0, y0 = 0, r0 = 0;
+  float x1 = 0, y1 = 0, r1 = 0;
+  std::vector<GradientStop> stops;  // sorted by pos
+};
+
 // One drawing command. Fields are interpreted per-op (documented inline). Kept
 // as a flat POD (no heap, trivially copyable) so a frame's worth batches cheaply.
 struct Command {
@@ -112,6 +129,11 @@ struct Command {
   bool ccw = false;                // Arc / Ellipse only.
   bool evenOdd = false;            // Fill / Clip fill-rule.
 
+  // Paint ops: index into CommandList::gradients, or -1 for a solid color.
+  // When >= 0, `color` carries only the globalAlpha snapshot in its alpha
+  // channel (the shader supplies RGB).
+  int32_t shader = -1;
+
   // Shadow snapshot (paint ops). Inactive when shadowColor's alpha is 0 —
   // the ctx only fills these in when the shadow would actually be visible.
   uint32_t shadowColor = 0;        // ARGB, globalAlpha folded in.
@@ -119,6 +141,24 @@ struct Command {
   float shadowDx = 0.0f, shadowDy = 0.0f;
 };
 
-using CommandList = std::vector<Command>;
+// A frame's batch: the command stream plus the gradient specs referenced by
+// paint commands (Command::shader). Forwards the std::vector surface the
+// command stream had when CommandList was a plain vector, so call sites can
+// keep treating it as one.
+struct CommandList {
+  std::vector<Command> commands;
+  std::vector<GradientSpec> gradients;
+
+  void push_back(const Command& c) { commands.push_back(c); }
+  void clear() {
+    commands.clear();
+    gradients.clear();
+  }
+  void reserve(size_t n) { commands.reserve(n); }
+  size_t size() const { return commands.size(); }
+  bool empty() const { return commands.empty(); }
+  auto begin() const { return commands.begin(); }
+  auto end() const { return commands.end(); }
+};
 
 }  // namespace rncanvas

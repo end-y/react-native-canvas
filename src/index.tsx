@@ -9,4 +9,6 @@ export type {
   DrawCallback,
   Path2D,
   InstanceData,
+  CanvasGradient,
+  GlobalCompositeOperation,
 } from './types';
