@@ -54,8 +54,9 @@ npm install @end-y/react-native-canvas
 cd ios && pod install
 ```
 
-Requires React Native **New Architecture** (Fabric). iOS 15+, Android API 24+
-(arm64-v8a / x86_64). Skia is statically linked — no extra setup.
+Requires React Native **New Architecture** (Fabric); developed and verified
+against RN 0.85. iOS 15+, Android API 24+ (arm64-v8a / x86_64). Skia is
+statically linked — no extra setup.
 
 ## API
 
