@@ -12,6 +12,8 @@ Android), driven by native vsync, with synchronous JSI calls — the same
 rendering architecture as Flutter, exposed through the API the web already
 taught you.
 
+🎬 **[Watch the demo](https://raw.githubusercontent.com/end-y/react-native-canvas/main/docs/video.mp4)** — the 13-page example gallery on the iOS & Android simulators.
+
 ```tsx
 import { Canvas, useCanvasRef, useCanvasFramer } from '@end-y/react-native-canvas';
 
