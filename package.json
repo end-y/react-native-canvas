@@ -18,6 +18,7 @@
     "android",
     "ios",
     "cpp",
+    "third_party/skia",
     "*.podspec",
     "react-native.config.js",
     "!ios/build",
@@ -45,7 +46,17 @@
   "keywords": [
     "react-native",
     "ios",
-    "android"
+    "android",
+    "canvas",
+    "canvas2d",
+    "skia",
+    "graphics",
+    "2d",
+    "drawing",
+    "game",
+    "html5-canvas",
+    "fabric",
+    "jsi"
   ],
   "repository": {
     "type": "git",
