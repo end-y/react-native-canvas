@@ -73,10 +73,14 @@ export default function ShapesPage() {
     ctx.beginPath();
     ctx.moveTo(w * 0.08, wy);
     const seg = (w * 0.84) / 4;
+    // Same magnitude, alternating sign per segment: the exit slope of one
+    // quadratic (-2A/seg) matches the entry slope of the next (+2(-A)/seg),
+    // so the joints are C1-smooth instead of kinked.
+    const amp = 26 * Math.sin(t * 2);
     for (let i = 0; i < 4; i++) {
       const x0 = w * 0.08 + i * seg;
-      const amp = 26 * Math.sin(t * 2 + i);
-      ctx.quadraticCurveTo(x0 + seg / 2, wy + amp, x0 + seg, wy);
+      const a = i % 2 === 0 ? amp : -amp;
+      ctx.quadraticCurveTo(x0 + seg / 2, wy + a, x0 + seg, wy);
     }
     ctx.stroke();
     ctx.lineCap = 'butt';
