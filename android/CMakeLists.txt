@@ -20,6 +20,7 @@ add_library(canvas SHARED
   ${CORE_DIR}/FilterParser.cpp
   ${CORE_DIR}/CanvasContext.cpp
   ${CORE_DIR}/CanvasGradient.cpp
+  ${CORE_DIR}/CanvasImage.cpp
   ${CORE_DIR}/Path2D.cpp
   ${CORE_DIR}/CanvasRenderer.cpp
   ${CORE_DIR}/CanvasRegistry.cpp

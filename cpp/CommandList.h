@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace rncanvas {
@@ -47,6 +48,8 @@ enum class Op : uint8_t {
   // path — not to the canvas. Lets fillInstances stamp a template under N
   // transforms into ONE path + ONE fill. Reset to identity on BeginPath.
   PathMatrix,
+  // Images
+  DrawImage,
 };
 
 // Stroke cap/join — values match SkPaint::Cap/Join order so the byte maps
@@ -127,6 +130,15 @@ struct FilterStep {
 // A parsed filter list, applied left-to-right. Empty = "none".
 using FilterSpec = std::vector<FilterStep>;
 
+// Encoded image bytes (png/jpeg/webp) + sniffed pixel size. Owned by an
+// ImageHost (ctx side, Skia-free) and referenced from CommandList::images;
+// the renderer decodes + caches lazily on first draw. Immutable once built.
+struct EncodedImage {
+  std::vector<uint8_t> bytes;
+  int width = 0;
+  int height = 0;
+};
+
 // One drawing command. Fields are interpreted per-op (documented inline). Kept
 // as a flat POD (no heap, trivially copyable) so a frame's worth batches cheaply.
 struct Command {
@@ -140,9 +152,11 @@ struct Command {
   // RoundRect: rect (x,y,w,h), corner radius a0.
   // Transform/SetTransform: 2x3 affine [a c e; b d f] = (x=a,y=b,w=c,h=d,a0=e,a1=f).
   // PathMatrix: same 2x3 affine packing; maps (px,py)->(a*px+c*py+e, b*px+d*py+f).
+  // DrawImage: src rect (x,y,w,h) in image px, dst rect (a0,a1,a2,a3).
   float x = 0, y = 0, w = 0, h = 0;
   float a0 = 0, a1 = 0;
-  float a2 = 0;  // Ellipse rotation (radians).
+  float a2 = 0;  // Ellipse rotation (radians). DrawImage dst w.
+  float a3 = 0;  // DrawImage dst h.
 
   // Snapshotted style for paint ops (Fill/Stroke/FillRect/StrokeRect/Clip).
   // ARGB 0xAARRGGBB (== SkColor), with globalAlpha already folded into A.
@@ -163,6 +177,10 @@ struct Command {
   // Paint ops: index into CommandList::filters, or -1 for no filter.
   int32_t filter = -1;
 
+  // DrawImage: index into CommandList::images.
+  int32_t image = -1;
+  bool smooth = true;  // DrawImage (imageSmoothingEnabled snapshot).
+
   // Shadow snapshot (paint ops). Inactive when shadowColor's alpha is 0 —
   // the ctx only fills these in when the shadow would actually be visible.
   uint32_t shadowColor = 0;        // ARGB, globalAlpha folded in.
@@ -178,12 +196,14 @@ struct CommandList {
   std::vector<Command> commands;
   std::vector<GradientSpec> gradients;
   std::vector<FilterSpec> filters;
+  std::vector<std::shared_ptr<const EncodedImage>> images;
 
   void push_back(const Command& c) { commands.push_back(c); }
   void clear() {
     commands.clear();
     gradients.clear();
     filters.clear();
+    images.clear();
   }
   void reserve(size_t n) { commands.reserve(n); }
   size_t size() const { return commands.size(); }

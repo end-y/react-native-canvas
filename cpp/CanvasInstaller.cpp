@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "CanvasContext.h"
+#include "CanvasImage.h"
 #include "CanvasRegistry.h"
 #include "FrameLoop.h"
 #include "Path2D.h"
@@ -39,6 +40,9 @@ void installCanvasApi(jsi::Runtime& rt) {
 
   // Global Path2D constructor (template geometry for ctx.fillInstances).
   installPath2D(rt);
+
+  // Image factory for useImage: __rncanvasCreateImage(bytes).
+  installImage(rt);
 }
 
 }  // namespace rncanvas

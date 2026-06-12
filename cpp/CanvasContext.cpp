@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "CanvasGradient.h"
+#include "CanvasImage.h"
 #include "ColorParser.h"
 #include "FilterParser.h"
 #include "Path2D.h"
@@ -111,6 +112,7 @@ void CanvasContext::flush() {
   if (flush_) flush_(commands_);
   commands_.clear();
   gradientIndex_.clear();
+  imageIndex_.clear();
   filterIndex_ = -1;
 }
 
@@ -192,6 +194,7 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
   if (name == "globalCompositeOperation")
     return jsi::String::createFromUtf8(rt, kBlendNames[(uint8_t)blend_]);
   if (name == "filter") return jsi::String::createFromUtf8(rt, filterStr_);
+  if (name == "imageSmoothingEnabled") return jsi::Value(imageSmoothing_);
   if (name == "shadowColor")
     return jsi::String::createFromUtf8(rt, shadowColorStr_);
   if (name == "shadowBlur") return jsi::Value((double)shadowBlur_);
@@ -406,6 +409,61 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
       const bool evenOdd = (n > i + 2 && a[i + 2].isString() &&
                             a[i + 2].asString(rt).utf8(rt) == "evenodd");
       return jsi::Value(pathHitTest(*cmds, x, y, evenOdd));
+    });
+  }
+
+  // Images --------------------------------------------------------------------
+  // drawImage(image, dx, dy) / (image, dx, dy, dw, dh) /
+  // (image, sx, sy, sw, sh, dx, dy, dw, dh). `image` comes from useImage
+  // (an ImageHost). All forms normalize to one src rect + one dst rect.
+  if (name == "drawImage") {
+    return method(9, [this](jsi::Runtime& rt, const jsi::Value&,
+                            const jsi::Value* a, size_t n) {
+      if (n < 3 || !a[0].isObject()) return jsi::Value::undefined();
+      jsi::Object o = a[0].getObject(rt);
+      if (!o.isHostObject(rt)) return jsi::Value::undefined();
+      auto host = std::dynamic_pointer_cast<ImageHost>(o.getHostObject(rt));
+      if (!host) return jsi::Value::undefined();
+      const std::shared_ptr<const EncodedImage>& img = host->data();
+      const double natW = img->width;
+      const double natH = img->height;
+
+      double sx = 0, sy = 0, sw = natW, sh = natH, dx, dy, dw, dh;
+      if (n >= 9) {
+        sx = num(a, n, 1); sy = num(a, n, 2);
+        sw = num(a, n, 3); sh = num(a, n, 4);
+        dx = num(a, n, 5); dy = num(a, n, 6);
+        dw = num(a, n, 7); dh = num(a, n, 8);
+      } else if (n >= 5) {
+        dx = num(a, n, 1); dy = num(a, n, 2);
+        dw = num(a, n, 3); dh = num(a, n, 4);
+      } else {
+        dx = num(a, n, 1); dy = num(a, n, 2);
+        dw = natW; dh = natH;
+      }
+      if (sw <= 0 || sh <= 0 || dw == 0 || dh == 0) {
+        return jsi::Value::undefined();
+      }
+
+      Command c{Op::DrawImage};
+      c.x = sx; c.y = sy; c.w = sw; c.h = sh;
+      c.a0 = dx; c.a1 = dy; c.a2 = dw; c.a3 = dh;
+      c.color = withAlpha(0xFFFFFFFF);  // globalAlpha rides the paint alpha
+      c.blend = (uint8_t)blend_;
+      c.smooth = imageSmoothing_;
+      snapshotShadow(c);
+      snapshotFilter(c);
+
+      auto it = imageIndex_.find(img.get());
+      if (it != imageIndex_.end()) {
+        c.image = it->second;
+      } else {
+        c.image = (int32_t)commands_.images.size();
+        commands_.images.push_back(img);
+        imageIndex_[img.get()] = c.image;
+      }
+      commands_.push_back(c);
+      return jsi::Value::undefined();
     });
   }
 
@@ -635,6 +693,10 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
     if (value.isString()) blendOpFromStr(value.asString(rt).utf8(rt), blend_);
     return;
   }
+  if (name == "imageSmoothingEnabled") {
+    if (value.isBool()) imageSmoothing_ = value.getBool();
+    return;
+  }
   if (name == "filter") {
     if (value.isString()) {
       std::string s = value.asString(rt).utf8(rt);
@@ -695,6 +757,7 @@ std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
       "quadraticCurveTo", "bezierCurveTo", "arcTo", "ellipse", "roundRect",
       "fill", "stroke", "clip", "fillInstances",
       "isPointInPath", "isPointInStroke",
+      "drawImage", "imageSmoothingEnabled",
       "save", "restore", "translate", "scale", "rotate",
       "transform", "setTransform", "resetTransform",
       "createLinearGradient", "createRadialGradient",

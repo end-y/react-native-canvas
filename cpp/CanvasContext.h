@@ -108,6 +108,12 @@ class CanvasContext : public facebook::jsi::HostObject {
   float shadowOffsetX_ = 0.0f;
   float shadowOffsetY_ = 0.0f;
 
+  bool imageSmoothing_ = true;  // imageSmoothingEnabled (web default true)
+
+  // Per-frame image snapshot dedupe: EncodedImage -> index into
+  // commands_.images. Cleared on flush. (Images are immutable — no version.)
+  std::unordered_map<const EncodedImage*, int32_t> imageIndex_;
+
   // CSS filter (ctx.filter). Empty spec = "none". filterIndex_ caches the
   // spec's index in the CURRENT frame's commands_.filters (-1 = not yet
   // appended); reset on flush and whenever the filter changes.

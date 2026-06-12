@@ -36,6 +36,15 @@ export interface CanvasGradient {
   addColorStop(offset: number, color: string): void;
 }
 
+// A decoded-on-demand image (C++ HostObject holding the encoded bytes).
+// Obtain via useImage(); pass to ctx.drawImage. Always fully loaded by the
+// time you hold one (useImage returns null until then), so complete === true.
+export interface CanvasImage {
+  readonly width: number;
+  readonly height: number;
+  readonly complete: boolean;
+}
+
 // The imperative drawing surface handed to user code. A subset of the web
 // CanvasRenderingContext2D (DESIGN §4), backed by a C++ JSI HostObject
 // (cpp/CanvasContext). Methods are faithful to the HTML5 names.
@@ -177,6 +186,29 @@ export interface Ctx {
     r1: number
   ): CanvasGradient;
 
+  // Images (image from useImage). Three web forms: draw at natural size,
+  // draw into a dst rect, or crop a src rect into a dst rect.
+  imageSmoothingEnabled: boolean;
+  drawImage(image: CanvasImage, dx: number, dy: number): void;
+  drawImage(
+    image: CanvasImage,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number
+  ): void;
+  drawImage(
+    image: CanvasImage,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number
+  ): void;
+
   // Flush the batched commands to the view and present (step 3 bridge; the
   // frame loop will call this for you in a later milestone).
   present(): void;
@@ -254,4 +286,9 @@ declare global {
     | ((tag: number, draw: DrawCallback) => void)
     | undefined;
   var __rncanvasStopLoop: ((tag: number) => void) | undefined;
+  // Image factory (cpp/CanvasImage): encoded png/jpeg/webp bytes -> image,
+  // or null if not decodable. Used by useImage.
+  var __rncanvasCreateImage:
+    | ((bytes: ArrayBuffer) => import('./types').CanvasImage | null)
+    | undefined;
 }

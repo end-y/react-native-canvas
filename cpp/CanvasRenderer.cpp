@@ -1,9 +1,21 @@
 #include "CanvasRenderer.h"
 
 #include <cmath>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
 
+#include "ImageDecode.h"
 #include "PathHitTest.h"
+#include "include/codec/SkCodec.h"
+#include "include/codec/SkJpegDecoder.h"
+#include "include/codec/SkPngDecoder.h"
+#include "include/codec/SkWebpDecoder.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkData.h"
+#include "include/core/SkImage.h"
 #include "include/core/SkPathUtils.h"
+#include "include/core/SkSamplingOptions.h"
 
 #include "include/core/SkBlendMode.h"
 #include "include/core/SkCanvas.h"
@@ -431,6 +443,63 @@ bool appendPathOp(SkPathBuilder& builder, const Command& c, SkMatrix& pathMatrix
   }
 }
 
+// Registers the decode codecs once (SkCodecs::Register is not thread-safe;
+// callers may be on the JS thread (imageBounds) or a render thread).
+std::once_flag gCodecsOnce;
+void registerCodecsOnce() {
+  std::call_once(gCodecsOnce, [] {
+    SkCodecs::Register(SkPngDecoder::Decoder());
+    SkCodecs::Register(SkJpegDecoder::Decoder());
+    SkCodecs::Register(SkWebpDecoder::Decoder());
+  });
+}
+
+// Decode cache: EncodedImage -> raster SkImage, decoded eagerly on first draw
+// (on the render thread, off the JS thread) and reused across frames. Keyed by
+// pointer with a weak_ptr guard against address reuse; expired entries are
+// pruned when the cache grows. GPU texture caching is Ganesh's job (it caches
+// uploads by the image's uniqueID), so the cache holds CPU images only and is
+// safe to share across canvases/threads (mutex).
+sk_sp<SkImage> imageFor(const std::shared_ptr<const EncodedImage>& e) {
+  static std::mutex mu;
+  static std::unordered_map<
+      const EncodedImage*,
+      std::pair<std::weak_ptr<const EncodedImage>, sk_sp<SkImage>>>
+      cache;
+
+  std::lock_guard<std::mutex> lock(mu);
+  auto it = cache.find(e.get());
+  if (it != cache.end() && !it->second.first.expired()) {
+    return it->second.second;
+  }
+
+  registerCodecsOnce();
+  // MakeWithoutCopy is safe: we decode to owned pixels before returning, and
+  // `e` keeps the bytes alive for the duration.
+  auto codec = SkCodec::MakeFromData(
+      SkData::MakeWithoutCopy(e->bytes.data(), e->bytes.size()));
+  if (!codec) return nullptr;
+  const SkImageInfo info = codec->getInfo()
+                               .makeColorType(kN32_SkColorType)
+                               .makeAlphaType(kPremul_SkAlphaType);
+  SkBitmap bm;
+  if (!bm.tryAllocPixels(info)) return nullptr;
+  if (codec->getPixels(info, bm.getPixels(), bm.rowBytes()) !=
+      SkCodec::kSuccess) {
+    return nullptr;
+  }
+  bm.setImmutable();
+  sk_sp<SkImage> img = SkImages::RasterFromBitmap(bm);
+
+  if (cache.size() >= 32) {  // prune entries whose EncodedImage died
+    for (auto i = cache.begin(); i != cache.end();) {
+      i = i->second.first.expired() ? cache.erase(i) : std::next(i);
+    }
+  }
+  cache[e.get()] = {e, img};
+  return img;
+}
+
 // Builds an SkPath from recorded path commands (the hit-test entry points).
 SkPath buildPathFromCommands(const std::vector<Command>& cmds, bool evenOdd) {
   SkPathBuilder builder;
@@ -446,6 +515,17 @@ SkPath buildPathFromCommands(const std::vector<Command>& cmds, bool evenOdd) {
 }
 
 }  // namespace
+
+bool imageBounds(const uint8_t* bytes, size_t len, int& width, int& height) {
+  registerCodecsOnce();
+  auto codec =
+      SkCodec::MakeFromData(SkData::MakeWithoutCopy(bytes, len));
+  if (!codec) return false;
+  const SkISize d = codec->dimensions();
+  width = d.width();
+  height = d.height();
+  return width > 0 && height > 0;
+}
 
 bool pathHitTest(const std::vector<Command>& pathCmds, float x, float y,
                  bool evenOdd) {
@@ -590,6 +670,28 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
       case Op::ResetTransform:
         canvas->setMatrix(base);
         break;
+
+      case Op::DrawImage: {
+        if (c.image < 0 || (size_t)c.image >= commands.images.size()) break;
+        const sk_sp<SkImage> img = imageFor(commands.images[(size_t)c.image]);
+        if (!img) break;
+        SkPaint p;
+        p.setAntiAlias(true);
+        p.setColor((SkColor)c.color);  // alpha = the globalAlpha snapshot
+        applyEffects(p, c, commands);
+        const SkRect src = SkRect::MakeXYWH(c.x, c.y, c.w, c.h);
+        const SkRect dst = SkRect::MakeXYWH(c.a0, c.a1, c.a2, c.a3);
+        const SkSamplingOptions sampling =
+            c.smooth ? SkSamplingOptions(SkFilterMode::kLinear,
+                                         SkMipmapMode::kLinear)
+                     : SkSamplingOptions(SkFilterMode::kNearest);
+        drawComposited(c, p, [&](const SkPaint& pp) {
+          canvas->drawImageRect(img, src, dst, sampling, &pp,
+                                SkCanvas::kStrict_SrcRectConstraint);
+        });
+        break;
+      }
+
       default:
         break;  // path ops are consumed by appendPathOp above
     }

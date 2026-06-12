@@ -18,6 +18,7 @@ import GradientsPage from './pages/GradientsPage';
 import ShadowsPage from './pages/ShadowsPage';
 import CompositePage from './pages/CompositePage';
 import FilterPage from './pages/FilterPage';
+import ImagePage from './pages/ImagePage';
 import ClipPage from './pages/ClipPage';
 import HitTestPage from './pages/HitTestPage';
 
@@ -63,6 +64,12 @@ const PAGES = [
     title: 'Composite Ops',
     subtitle: 'globalCompositeOperation — all 26 modes',
     Component: CompositePage,
+  },
+  {
+    key: 'image',
+    title: 'Images',
+    subtitle: 'useImage · drawImage 3/5/9-arg · smoothing · filter on image',
+    Component: ImagePage,
   },
   {
     key: 'filter',
