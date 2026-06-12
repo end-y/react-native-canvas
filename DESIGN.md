@@ -394,6 +394,10 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 - **Pixel erişimi:** `getImageData`/`putImageData` (render-thread readback senkronizasyonu + ArrayBuffer köprüsü).
 - **`toDataURL` / `toBlob`** (readback + PNG/JPEG encode + base64).
 - **Worklet runtime:** çizimi ayrı thread'e taşıma (Reanimated'e yaslanma vs. kendi runtime — o zaman karar verilecek). `ctx` HostObject'i worklet runtime'ına kurma gereği not edildi.
+- **Binary dağıtım altyapısı (KARAR 2026-06-12: v0.1 npm-içinde çıkar, bu iş v0.2'ye):** Skia lib'leri şimdilik npm paketinde (37MB tarball / 115MB unpacked — react-native-skia ile aynı lig, kanıtlanmış, sıfır altyapı). harfbuzz rebuild'i (+10-15MB/lib) ve/veya yeni ABI'lerle tarball 60-70MB'a dayandığında geçiş ZORUNLU olacak; plan:
+  - **Android:** prefab'lı AAR (libskia.a + header'lar, ABI başına; AAR=zip elle kurulabilir) → **GitHub Pages'te statik Maven repo** (pom+sha1 layout; Sonatype bürokrasisi YOK; GH Packages OLMAZ — public'te bile token ister). Gradle build sırasında indirir, `~/.gradle` cache'ler; tüketim mevcut prefab yolundan (`find_package`, `ReactAndroid::jsi` emsali).
+  - **iOS:** iki .a'dan `xcodebuild -create-xcframework` → zip + sha256 → GitHub Release asset → ayrı `CanvasSkia.podspec` (`source: {http:..., sha256:...}`, `vendored_frameworks`); `Canvas.podspec` ona depend eder. ⚠️ Risk: Yol A'da `vendored_libraries` linki app'e geçirmemişti (OTHER_LDFLAGS hack'i) — xcframework propagasyonu test edilmeden güvenilmez.
+  - npm paketi ~2MB'a iner (cpp/ kaynak kalır — JSI/codegen kullanıcının RN sürümüne karşı derlenmek zorunda, prebuilt edilemez). Maliyet: ~2 gün kurulum + her Skia güncellemesinde ~1 saatlik (script'lenebilir) release ritüeli + sürüm senkronu (podspec sha256 / gradle version / npm version birlikte).
 - **Web-uyumluluk cilası:** `save/restore`'un TÜM ctx state'ini (fillStyle, lineWidth, shadow, blend...) stack'lemesi (şu an yalnız transform+clip — bilinen sapma), `hsl()/hsla()` + 140 CSS isimli renk, `fill(path)/stroke(path)/clip(path)` Path2D overload'ları, `setLineDash`, `createConicGradient` (SweepGradient lib'de hazır), `ctx.canvas.width/height`.
 
 ---
