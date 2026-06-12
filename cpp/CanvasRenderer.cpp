@@ -505,10 +505,11 @@ sk_sp<SkImage> imageFor(const std::shared_ptr<const EncodedImage>& e) {
   bm.setImmutable();
   sk_sp<SkImage> img = SkImages::RasterFromBitmap(bm);
 
-  if (cache.size() >= 32) {  // prune entries whose EncodedImage died
-    for (auto i = cache.begin(); i != cache.end();) {
-      i = i->second.first.expired() ? cache.erase(i) : std::next(i);
-    }
+  // Prune dead entries on EVERY insert — an expired entry pins megabytes of
+  // decoded pixels, so waiting for a size threshold would leak under light
+  // image churn.
+  for (auto i = cache.begin(); i != cache.end();) {
+    i = i->second.first.expired() ? cache.erase(i) : std::next(i);
   }
   cache[e.get()] = {e, img};
   return img;

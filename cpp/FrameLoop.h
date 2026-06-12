@@ -43,4 +43,10 @@ void installFrameLoopApi(facebook::jsi::Runtime& runtime);
 // thread for the given canvas tag.
 void onVsync(int tag, double timestampSeconds, int width, int height);
 
+// Drops every FrameLoop (and the jsi::Function/Value objects they own).
+// Called by the runtime-lifetime sentinel WHILE the owning runtime is tearing
+// down — the only safe window to destroy same-runtime jsi objects after a
+// reload that skipped the JS-side stopLoop cleanup.
+void clearAllFrameLoops();
+
 }  // namespace rncanvas

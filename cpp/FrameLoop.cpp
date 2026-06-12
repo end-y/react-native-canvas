@@ -70,6 +70,11 @@ void onVsync(int tag, double timestamp, int width, int height) {
       });
 }
 
+void clearAllFrameLoops() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_loops.clear();
+}
+
 void installFrameLoopApi(jsi::Runtime& rt) {
   auto startLoop = jsi::Function::createFromHostFunction(
       rt, jsi::PropNameID::forUtf8(rt, "__rncanvasStartLoop"), 2,

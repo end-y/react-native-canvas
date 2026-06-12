@@ -26,8 +26,16 @@ inline const uint8_t* jsiBytes(facebook::jsi::Runtime& rt,
   jsi::Object bufObj = bufVal.getObject(rt);
   if (!bufObj.isArrayBuffer(rt)) return nullptr;
   jsi::ArrayBuffer ab = bufObj.getArrayBuffer(rt);
-  const size_t off = (size_t)o.getProperty(rt, "byteOffset").asNumber();
-  len = (size_t)o.getProperty(rt, "byteLength").asNumber();
+  // Validate the view's claimed window against the REAL buffer size — a lying
+  // object must not make us read out of bounds.
+  const double offD = o.getProperty(rt, "byteOffset").asNumber();
+  const double lenD = o.getProperty(rt, "byteLength").asNumber();
+  const size_t bufSize = ab.size(rt);
+  if (!(offD >= 0) || !(lenD >= 0)) return nullptr;  // also rejects NaN
+  const size_t off = (size_t)offD;
+  const size_t n = (size_t)lenD;
+  if (off > bufSize || n > bufSize - off) return nullptr;
+  len = n;
   return ab.data(rt) + off;
 }
 

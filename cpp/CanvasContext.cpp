@@ -46,8 +46,18 @@ const float* asFloat32(jsi::Runtime& rt, const jsi::Value& v, size_t& len) {
   jsi::Object bufObj = bufVal.getObject(rt);
   if (!bufObj.isArrayBuffer(rt)) return nullptr;
   jsi::ArrayBuffer ab = bufObj.getArrayBuffer(rt);
-  const size_t byteOffset = (size_t)o.getProperty(rt, "byteOffset").asNumber();
-  len = (size_t)o.getProperty(rt, "length").asNumber();
+  // Validate the view's claimed window against the REAL buffer size — a lying
+  // object must not make us read out of bounds.
+  const double offD = o.getProperty(rt, "byteOffset").asNumber();
+  const double lenD = o.getProperty(rt, "length").asNumber();
+  const size_t bufSize = ab.size(rt);
+  if (!(offD >= 0) || !(lenD >= 0)) return nullptr;  // also rejects NaN
+  const size_t byteOffset = (size_t)offD;
+  const size_t n = (size_t)lenD;
+  if (byteOffset > bufSize || n > (bufSize - byteOffset) / sizeof(float)) {
+    return nullptr;
+  }
+  len = n;
   return reinterpret_cast<const float*>(ab.data(rt) + byteOffset);
 }
 
@@ -121,6 +131,7 @@ void CanvasContext::flush() {
   if (flush_) flush_(commands_);
   commands_.clear();
   gradientIndex_.clear();
+  gradientKeepAlive_.clear();
   imageIndex_.clear();
   filterIndex_ = -1;
   fontIndex_ = -1;
@@ -150,6 +161,7 @@ int32_t CanvasContext::snapshotGradient(const std::shared_ptr<GradientHost>& g) 
   const int32_t idx = (int32_t)commands_.gradients.size();
   commands_.gradients.push_back(g->spec());
   gradientIndex_[g.get()] = {g->version(), idx};
+  gradientKeepAlive_.push_back(g);  // pin the address until flush
   return idx;
 }
 

@@ -16,7 +16,28 @@ namespace rncanvas {
 
 using namespace facebook;
 
+namespace {
+
+// Reload safety. FrameLoops live in a process-global map and own jsi objects
+// (drawFn, the cached ctx value). A Metro reload tears the runtime down
+// WITHOUT necessarily running the JS-side stopLoop cleanup — leaving those
+// jsi objects dangling; the next startLoop on the new runtime would then
+// destroy old-runtime objects against the new runtime (undefined behavior /
+// crash). This sentinel lives in the runtime's global object, so its
+// destructor runs during THAT runtime's heap finalization — the one safe
+// window to release same-runtime jsi objects.
+class RuntimeLifetimeSentinel : public jsi::HostObject {
+ public:
+  ~RuntimeLifetimeSentinel() override { clearAllFrameLoops(); }
+};
+
+}  // namespace
+
 void installCanvasApi(jsi::Runtime& rt) {
+  rt.global().setProperty(
+      rt, "__rncanvasRuntimeLifetime",
+      jsi::Object::createFromHostObject(
+          rt, std::make_shared<RuntimeLifetimeSentinel>()));
   auto getContext = jsi::Function::createFromHostFunction(
       rt, jsi::PropNameID::forUtf8(rt, "__rncanvasGetContext"), 1,
       [](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* args,

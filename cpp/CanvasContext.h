@@ -138,8 +138,11 @@ class CanvasContext : public facebook::jsi::HostObject {
   std::shared_ptr<GradientHost> fillGradient_;
   std::shared_ptr<GradientHost> strokeGradient_;
   // Per-frame snapshot dedupe: host -> (version, index into
-  // commands_.gradients). Cleared on flush.
+  // commands_.gradients). Cleared on flush. gradientKeepAlive_ pins the hosts
+  // for the frame so a GC'd gradient's address can't be REUSED by a new
+  // gradient mid-frame and match a stale dedupe entry.
   std::unordered_map<GradientHost*, std::pair<uint64_t, int32_t>> gradientIndex_;
+  std::vector<std::shared_ptr<GradientHost>> gradientKeepAlive_;
 };
 
 }  // namespace rncanvas
