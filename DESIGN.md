@@ -202,10 +202,11 @@ Binlerce moving primitive için **tek bir** kaçış kapısı. Tasarım ilkesi: 
 ### Stretch op'ları ✅ (tamamlandı)
 `quadraticCurveTo`, `bezierCurveTo`, `arcTo`, `ellipse`, `roundRect`, `lineCap`, `lineJoin`, `miterLimit`, `setTransform`/`transform`/`resetTransform`, `clip()`, `fill(fillRule)` — hepsi 0.1'de (yukarıdaki listelerde).
 
-### v1 YAYIN KAPISI — text + image (SIRADA)
-İnsanların önüne çıkmadan önce bitecekler; ikisi de **tek Skia rebuild turunda** açılır (codec + text flag'leri birlikte derlenir, iki ayrı rebuild'e gerek yok):
-- **Image:** `useImage(source)` (require / URI / base64) + `drawImage` overload'ları — codec rebuild (png/jpeg/webp decode) + GPU texture upload + render-thread kaynak yaşam döngüsü.
-- **Text / font:** `font` shorthand parse + `fillText`/`strokeText` (tek satır) + `measureText` + `textAlign`/`textBaseline` — text rebuild (freetype/harfbuzz/skshaper) + sistem fontları + opsiyonel `.ttf`.
+### v1 YAYIN KAPISI — text + image ✅ (İKİSİ DE TAMAMLANDI)
+Tek Skia rebuild turuyla (codec decode + freetype, `build-skia.sh`) açıldı:
+- **Image ✅:** `useImage(source)` + `drawImage` 3/5/9-arg. Byte'ları **JS fetch** getirir (native ağ kodu yok), `EncodedImage` sidecar + render-thread decode cache; GPU texture cache Ganesh'in (uniqueID). `imageSmoothingEnabled`. Image'lar aynı paint pipeline'dan geçer (alpha/blend/shadow/filter). iOS'ta görsel doğrulandı.
+- **Text ✅:** `font` shorthand (FontParser, px zorunlu) + `fillText`/`strokeText` + senkron `measureText` (TextMeasure.h Skia-free sınırı) + `textAlign`/`textBaseline` + **runtime `.ttf`** (`loadFont`/`useFont`, image byte kalıbı). Font: Apple CoreText / Android FreeType+SkFontMgr_android; typeface cache'li. Gradient'li/gölgeli/filtreli text bedava (aynı pipeline).
+- **Bilinen v0.1 sınırı (NOT):** basit shaping — Arapça/Hint ligatürleri ve ZWJ emoji dizileri birleşmez (harfbuzz/icu kapalı, binary küçük); v2'de SkShaper rebuild'i ile gelir. `textAlign: start/end` LTR takma adı. Release-mode bundled `require()` asset'leri sınırlı (http/data: güvenilir).
 
 ### v1'de YOK (→ v2)
 - Pattern (`createPattern` — image altyapısını bekler, image'dan sonra ucuz)
