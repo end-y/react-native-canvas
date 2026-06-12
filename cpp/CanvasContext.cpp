@@ -8,8 +8,10 @@
 #include "CanvasImage.h"
 #include "ColorParser.h"
 #include "FilterParser.h"
+#include "FontParser.h"
 #include "Path2D.h"
 #include "PathHitTest.h"
+#include "TextMeasure.h"
 
 namespace rncanvas {
 
@@ -76,6 +78,13 @@ constexpr const char* kBlendNames[] = {
 };
 constexpr size_t kBlendCount = sizeof(kBlendNames) / sizeof(kBlendNames[0]);
 
+// textAlign / textBaseline names, in enum order.
+constexpr const char* kAlignNames[] = {"start", "left", "center", "right",
+                                       "end"};
+constexpr const char* kBaselineNames[] = {"alphabetic",  "top",    "hanging",
+                                          "middle",      "ideographic",
+                                          "bottom"};
+
 bool blendOpFromStr(const std::string& s, BlendOp& out) {
   for (size_t i = 0; i < kBlendCount; ++i) {
     if (s == kBlendNames[i]) {
@@ -114,6 +123,17 @@ void CanvasContext::flush() {
   gradientIndex_.clear();
   imageIndex_.clear();
   filterIndex_ = -1;
+  fontIndex_ = -1;
+}
+
+void CanvasContext::snapshotFont(Command& c) {
+  if (fontIndex_ < 0) {
+    fontIndex_ = (int32_t)commands_.fonts.size();
+    commands_.fonts.push_back(font_);
+  }
+  c.font = fontIndex_;
+  c.align = (uint8_t)textAlign_;
+  c.baseline = (uint8_t)textBaseline_;
 }
 
 uint32_t CanvasContext::withAlpha(uint32_t color) const {
@@ -195,6 +215,12 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     return jsi::String::createFromUtf8(rt, kBlendNames[(uint8_t)blend_]);
   if (name == "filter") return jsi::String::createFromUtf8(rt, filterStr_);
   if (name == "imageSmoothingEnabled") return jsi::Value(imageSmoothing_);
+  if (name == "font") return jsi::String::createFromUtf8(rt, fontStr_);
+  if (name == "textAlign")
+    return jsi::String::createFromUtf8(rt, kAlignNames[(uint8_t)textAlign_]);
+  if (name == "textBaseline")
+    return jsi::String::createFromUtf8(rt,
+                                       kBaselineNames[(uint8_t)textBaseline_]);
   if (name == "shadowColor")
     return jsi::String::createFromUtf8(rt, shadowColorStr_);
   if (name == "shadowBlur") return jsi::Value((double)shadowBlur_);
@@ -467,6 +493,63 @@ jsi::Value CanvasContext::get(jsi::Runtime& rt, const jsi::PropNameID& nameId) {
     });
   }
 
+  // Text ----------------------------------------------------------------------
+  // fillText/strokeText(text, x, y) — single line, current font/textAlign/
+  // textBaseline. (maxWidth scaling: not in 0.1.) Text rides CommandList as a
+  // sidecar string; the FontSpec is deduped per frame like gradients/filters.
+  if (name == "fillText" || name == "strokeText") {
+    const bool isStroke = (name == "strokeText");
+    return method(3, [this, isStroke](jsi::Runtime& rt, const jsi::Value&,
+                                      const jsi::Value* a, size_t n) {
+      if (n < 3 || !a[0].isString()) return jsi::Value::undefined();
+      std::string str = a[0].asString(rt).utf8(rt);
+      if (str.empty()) return jsi::Value::undefined();
+
+      Command c{isStroke ? Op::StrokeText : Op::FillText};
+      c.x = num(a, n, 1);
+      c.y = num(a, n, 2);
+      if (isStroke) {
+        snapshotStrokeStyle(c);
+        c.lineWidth = lineWidth_;
+        c.cap = (uint8_t)lineCap_;
+        c.join = (uint8_t)lineJoin_;
+        c.miterLimit = miterLimit_;
+      } else {
+        snapshotFillStyle(c);
+      }
+      c.blend = (uint8_t)blend_;
+      snapshotShadow(c);
+      snapshotFilter(c);
+      snapshotFont(c);
+      c.text = (int32_t)commands_.texts.size();
+      commands_.texts.push_back(std::move(str));
+      commands_.push_back(c);
+      return jsi::Value::undefined();
+    });
+  }
+  // measureText(text) — synchronous, via the Skia-free TextMeasure boundary.
+  // Metrics are relative to the alphabetic baseline / left alignment point.
+  if (name == "measureText") {
+    return method(1, [this](jsi::Runtime& rt, const jsi::Value&,
+                            const jsi::Value* a, size_t n) {
+      jsi::Object out(rt);
+      TextMetricsNative m;
+      std::string str =
+          (n > 0 && a[0].isString()) ? a[0].asString(rt).utf8(rt) : "";
+      if (!str.empty() && !measureTextNative(str, font_, m)) {
+        m = TextMetricsNative{};  // no typeface: all zeros, like an empty draw
+      }
+      out.setProperty(rt, "width", (double)m.width);
+      out.setProperty(rt, "actualBoundingBoxAscent", (double)m.actualAscent);
+      out.setProperty(rt, "actualBoundingBoxDescent", (double)m.actualDescent);
+      out.setProperty(rt, "actualBoundingBoxLeft", (double)m.actualLeft);
+      out.setProperty(rt, "actualBoundingBoxRight", (double)m.actualRight);
+      out.setProperty(rt, "fontBoundingBoxAscent", (double)m.fontAscent);
+      out.setProperty(rt, "fontBoundingBoxDescent", (double)m.fontDescent);
+      return jsi::Value(rt, out);
+    });
+  }
+
   // Instanced fast path (non-standard) --------------------------------------
   // fillInstances(template, data, count): the single instancing primitive.
   // `template` is a Path2D (a circle/rect is just a Path2D — no special-casing);
@@ -697,6 +780,42 @@ void CanvasContext::set(jsi::Runtime& rt, const jsi::PropNameID& nameId,
     if (value.isBool()) imageSmoothing_ = value.getBool();
     return;
   }
+  if (name == "font") {
+    if (value.isString()) {
+      std::string s = value.asString(rt).utf8(rt);
+      FontSpec spec;
+      if (parseFont(s, spec)) {  // invalid string leaves the font unchanged
+        font_ = std::move(spec);
+        fontStr_ = s;
+        fontIndex_ = -1;  // next text op snapshots the new spec
+      }
+    }
+    return;
+  }
+  if (name == "textAlign") {
+    if (value.isString()) {
+      std::string s = value.asString(rt).utf8(rt);
+      for (size_t i = 0; i < 5; ++i) {
+        if (s == kAlignNames[i]) {
+          textAlign_ = (TextAlign)i;
+          break;
+        }
+      }
+    }
+    return;
+  }
+  if (name == "textBaseline") {
+    if (value.isString()) {
+      std::string s = value.asString(rt).utf8(rt);
+      for (size_t i = 0; i < 6; ++i) {
+        if (s == kBaselineNames[i]) {
+          textBaseline_ = (TextBaseline)i;
+          break;
+        }
+      }
+    }
+    return;
+  }
   if (name == "filter") {
     if (value.isString()) {
       std::string s = value.asString(rt).utf8(rt);
@@ -758,6 +877,8 @@ std::vector<jsi::PropNameID> CanvasContext::getPropertyNames(jsi::Runtime& rt) {
       "fill", "stroke", "clip", "fillInstances",
       "isPointInPath", "isPointInStroke",
       "drawImage", "imageSmoothingEnabled",
+      "font", "textAlign", "textBaseline",
+      "fillText", "strokeText", "measureText",
       "save", "restore", "translate", "scale", "rotate",
       "transform", "setTransform", "resetTransform",
       "createLinearGradient", "createRadialGradient",

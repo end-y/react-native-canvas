@@ -36,6 +36,18 @@ export interface CanvasGradient {
   addColorStop(offset: number, color: string): void;
 }
 
+// Synchronous measureText result (web TextMetrics subset). Values are
+// relative to the alphabetic baseline / left alignment point.
+export interface TextMetrics {
+  readonly width: number;
+  readonly actualBoundingBoxAscent: number;
+  readonly actualBoundingBoxDescent: number;
+  readonly actualBoundingBoxLeft: number;
+  readonly actualBoundingBoxRight: number;
+  readonly fontBoundingBoxAscent: number;
+  readonly fontBoundingBoxDescent: number;
+}
+
 // A decoded-on-demand image (C++ HostObject holding the encoded bytes).
 // Obtain via useImage(); pass to ctx.drawImage. Always fully loaded by the
 // time you hold one (useImage returns null until then), so complete === true.
@@ -186,6 +198,24 @@ export interface Ctx {
     r1: number
   ): CanvasGradient;
 
+  // Text (single line). v0.1 uses simple shaping: Latin/Cyrillic/Greek/CJK
+  // render correctly; complex scripts needing ligatures (Arabic, Indic) and
+  // ZWJ emoji sequences do NOT combine — documented limitation.
+  // font: CSS shorthand subset "[style] [weight] <size>px <families>";
+  // px is required. Custom families come from loadFont/useFont.
+  font: string;
+  textAlign: 'start' | 'left' | 'center' | 'right' | 'end'; // start/end = LTR
+  textBaseline:
+    | 'alphabetic'
+    | 'top'
+    | 'hanging'
+    | 'middle'
+    | 'ideographic'
+    | 'bottom';
+  fillText(text: string, x: number, y: number): void;
+  strokeText(text: string, x: number, y: number): void;
+  measureText(text: string): TextMetrics;
+
   // Images (image from useImage). Three web forms: draw at natural size,
   // draw into a dst rect, or crop a src rect into a dst rect.
   imageSmoothingEnabled: boolean;
@@ -290,5 +320,10 @@ declare global {
   // or null if not decodable. Used by useImage.
   var __rncanvasCreateImage:
     | ((bytes: ArrayBuffer) => import('./types').CanvasImage | null)
+    | undefined;
+  // Custom font registration (.ttf/.otf bytes under a family name). Used by
+  // loadFont/useFont.
+  var __rncanvasRegisterFont:
+    | ((bytes: ArrayBuffer, family: string) => boolean)
     | undefined;
 }

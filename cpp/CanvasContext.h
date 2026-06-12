@@ -110,6 +110,19 @@ class CanvasContext : public facebook::jsi::HostObject {
 
   bool imageSmoothing_ = true;  // imageSmoothingEnabled (web default true)
 
+  // Text state (web defaults: "10px sans-serif", start, alphabetic).
+  FontSpec font_;
+  std::string fontStr_ = "10px sans-serif";
+  TextAlign textAlign_ = TextAlign::Start;
+  TextBaseline textBaseline_ = TextBaseline::Alphabetic;
+  // Per-frame index of font_ in commands_.fonts (-1 = not yet appended);
+  // reset on flush and whenever ctx.font changes.
+  int32_t fontIndex_ = -1;
+
+  // Stamps the current font/align/baseline onto a text command (appends the
+  // FontSpec to commands_.fonts once per frame via fontIndex_).
+  void snapshotFont(Command& c);
+
   // Per-frame image snapshot dedupe: EncodedImage -> index into
   // commands_.images. Cleared on flush. (Images are immutable — no version.)
   std::unordered_map<const EncodedImage*, int32_t> imageIndex_;

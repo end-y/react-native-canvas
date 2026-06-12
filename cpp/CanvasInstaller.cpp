@@ -8,7 +8,9 @@
 #include "CanvasImage.h"
 #include "CanvasRegistry.h"
 #include "FrameLoop.h"
+#include "JsiBytes.h"
 #include "Path2D.h"
+#include "TextMeasure.h"
 
 namespace rncanvas {
 
@@ -43,6 +45,22 @@ void installCanvasApi(jsi::Runtime& rt) {
 
   // Image factory for useImage: __rncanvasCreateImage(bytes).
   installImage(rt);
+
+  // Custom font registration for loadFont: __rncanvasRegisterFont(bytes,
+  // family) -> bool. Same JS-fetches-bytes pattern as images.
+  auto registerFont = jsi::Function::createFromHostFunction(
+      rt, jsi::PropNameID::forUtf8(rt, "__rncanvasRegisterFont"), 2,
+      [](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* args,
+         size_t count) -> jsi::Value {
+        if (count < 2 || !args[1].isString()) return jsi::Value(false);
+        size_t len = 0;
+        const uint8_t* bytes = jsiBytes(rt, args[0], len);
+        if (!bytes || len == 0) return jsi::Value(false);
+        const std::string family = args[1].asString(rt).utf8(rt);
+        if (family.empty()) return jsi::Value(false);
+        return jsi::Value(registerFontData(bytes, len, family));
+      });
+  rt.global().setProperty(rt, "__rncanvasRegisterFont", registerFont);
 }
 
 }  // namespace rncanvas

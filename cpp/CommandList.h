@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace rncanvas {
@@ -50,6 +51,9 @@ enum class Op : uint8_t {
   PathMatrix,
   // Images
   DrawImage,
+  // Text
+  FillText,
+  StrokeText,
 };
 
 // Stroke cap/join — values match SkPaint::Cap/Join order so the byte maps
@@ -130,6 +134,27 @@ struct FilterStep {
 // A parsed filter list, applied left-to-right. Empty = "none".
 using FilterSpec = std::vector<FilterStep>;
 
+// ctx.font, parsed by FontParser (Skia-free). Families are tried in order;
+// generic families (sans-serif / serif / monospace) resolve to platform
+// defaults in the renderer. Web default: "10px sans-serif".
+struct FontSpec {
+  float size = 10.0f;     // px
+  uint16_t weight = 400;  // 100..900 (bold = 700)
+  bool italic = false;
+  std::vector<std::string> families;  // empty = platform default sans
+};
+
+// textAlign / textBaseline state bytes (web names; renderer maps to offsets).
+enum class TextAlign : uint8_t { Start = 0, Left, Center, Right, End };
+enum class TextBaseline : uint8_t {
+  Alphabetic = 0,
+  Top,
+  Hanging,
+  Middle,
+  Ideographic,
+  Bottom,
+};
+
 // Encoded image bytes (png/jpeg/webp) + sniffed pixel size. Owned by an
 // ImageHost (ctx side, Skia-free) and referenced from CommandList::images;
 // the renderer decodes + caches lazily on first draw. Immutable once built.
@@ -181,6 +206,14 @@ struct Command {
   int32_t image = -1;
   bool smooth = true;  // DrawImage (imageSmoothingEnabled snapshot).
 
+  // FillText/StrokeText: pos (x,y); indices into CommandList::texts / fonts;
+  // align/baseline snapshots (TextAlign / TextBaseline bytes). StrokeText
+  // also uses lineWidth/cap/join/miterLimit.
+  int32_t text = -1;
+  int32_t font = -1;
+  uint8_t align = 0;
+  uint8_t baseline = 0;
+
   // Shadow snapshot (paint ops). Inactive when shadowColor's alpha is 0 —
   // the ctx only fills these in when the shadow would actually be visible.
   uint32_t shadowColor = 0;        // ARGB, globalAlpha folded in.
@@ -197,6 +230,8 @@ struct CommandList {
   std::vector<GradientSpec> gradients;
   std::vector<FilterSpec> filters;
   std::vector<std::shared_ptr<const EncodedImage>> images;
+  std::vector<std::string> texts;
+  std::vector<FontSpec> fonts;
 
   void push_back(const Command& c) { commands.push_back(c); }
   void clear() {
@@ -204,6 +239,8 @@ struct CommandList {
     gradients.clear();
     filters.clear();
     images.clear();
+    texts.clear();
+    fonts.clear();
   }
   void reserve(size_t n) { commands.reserve(n); }
   size_t size() const { return commands.size(); }

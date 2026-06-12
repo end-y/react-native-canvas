@@ -18,6 +18,7 @@ add_library(canvas SHARED
   src/main/cpp/AndroidGpuSurface.cpp
   ${CORE_DIR}/ColorParser.cpp
   ${CORE_DIR}/FilterParser.cpp
+  ${CORE_DIR}/FontParser.cpp
   ${CORE_DIR}/CanvasContext.cpp
   ${CORE_DIR}/CanvasGradient.cpp
   ${CORE_DIR}/CanvasImage.cpp

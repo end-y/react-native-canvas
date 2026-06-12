@@ -7,6 +7,7 @@
 
 #include "ImageDecode.h"
 #include "PathHitTest.h"
+#include "TextMeasure.h"
 #include "include/codec/SkCodec.h"
 #include "include/codec/SkJpegDecoder.h"
 #include "include/codec/SkPngDecoder.h"
@@ -14,8 +15,19 @@
 #include "include/core/SkBitmap.h"
 #include "include/core/SkData.h"
 #include "include/core/SkImage.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkFontMetrics.h"
+#include "include/core/SkFontMgr.h"
 #include "include/core/SkPathUtils.h"
 #include "include/core/SkSamplingOptions.h"
+#include "include/core/SkTypeface.h"
+
+#if defined(__APPLE__)
+#include "include/ports/SkFontMgr_mac_ct.h"
+#elif defined(__ANDROID__)
+#include "include/ports/SkFontMgr_android.h"
+#include "include/ports/SkFontScanner_FreeType.h"
+#endif
 
 #include "include/core/SkBlendMode.h"
 #include "include/core/SkCanvas.h"
@@ -500,6 +512,141 @@ sk_sp<SkImage> imageFor(const std::shared_ptr<const EncodedImage>& e) {
   return img;
 }
 
+// ---------------------------------------------------------------------------
+// Text: font manager, custom fonts, typeface cache, align/baseline offsets.
+// ---------------------------------------------------------------------------
+
+sk_sp<SkFontMgr> fontMgr() {
+  static const sk_sp<SkFontMgr> mgr = [] {
+#if defined(__APPLE__)
+    return SkFontMgr_New_CoreText(nullptr);
+#elif defined(__ANDROID__)
+    return SkFontMgr_New_Android(nullptr, SkFontScanner_Make_FreeType());
+#else
+    return sk_sp<SkFontMgr>(nullptr);
+#endif
+  }();
+  return mgr;
+}
+
+std::string lowercase(const std::string& s) {
+  std::string out = s;
+  for (char& ch : out) {
+    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+  }
+  return out;
+}
+
+// Custom fonts registered via registerFontData, keyed by lowercase family.
+// Checked before the system font manager.
+std::mutex& customFontMutex() {
+  static std::mutex mu;
+  return mu;
+}
+std::unordered_map<std::string, sk_sp<SkTypeface>>& customFonts() {
+  static std::unordered_map<std::string, sk_sp<SkTypeface>> fonts;
+  return fonts;
+}
+
+// CSS generic family -> platform family name (nullptr = system default).
+const char* genericFamily(const std::string& lower) {
+#if defined(__APPLE__)
+  if (lower == "serif") return "Times New Roman";
+  if (lower == "monospace") return "Courier New";
+#else
+  if (lower == "serif") return "serif";
+  if (lower == "monospace") return "monospace";
+#endif
+  return nullptr;  // sans-serif and unknown generics use the default
+}
+
+// Resolves a FontSpec to a typeface: custom fonts first, then the system
+// font manager in family order, then the platform default. Cached — font
+// resolution is expensive and specs repeat every frame.
+sk_sp<SkTypeface> typefaceFor(const FontSpec& spec) {
+  std::string key = spec.italic ? "i|" : "n|";
+  key += std::to_string(spec.weight);
+  for (const std::string& f : spec.families) {
+    key += '|';
+    key += lowercase(f);
+  }
+
+  static std::mutex mu;
+  static std::unordered_map<std::string, sk_sp<SkTypeface>> cache;
+  {
+    std::lock_guard<std::mutex> lock(mu);
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
+  }
+
+  const SkFontStyle style(spec.weight, SkFontStyle::kNormal_Width,
+                          spec.italic ? SkFontStyle::kItalic_Slant
+                                      : SkFontStyle::kUpright_Slant);
+  sk_sp<SkTypeface> tf;
+  for (const std::string& fam : spec.families) {
+    const std::string lower = lowercase(fam);
+    {
+      std::lock_guard<std::mutex> lock(customFontMutex());
+      auto it = customFonts().find(lower);
+      if (it != customFonts().end()) {
+        tf = it->second;
+        break;
+      }
+    }
+    if (lower == "sans-serif") break;  // default — resolved below
+    const char* name = genericFamily(lower);
+    if (auto mgr = fontMgr()) {
+      tf = mgr->matchFamilyStyle(name ? name : fam.c_str(), style);
+      if (tf) break;
+    }
+  }
+  if (!tf) {
+    if (auto mgr = fontMgr()) {
+      tf = mgr->matchFamilyStyle(nullptr, style);  // platform default
+      if (!tf) tf = mgr->legacyMakeTypeface(nullptr, style);
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(mu);
+  cache[key] = tf;
+  return tf;
+}
+
+SkFont skFontFor(const FontSpec& spec) {
+  SkFont f(typefaceFor(spec), spec.size);
+  f.setEdging(SkFont::Edging::kAntiAlias);
+  f.setSubpixel(true);
+  return f;
+}
+
+// textBaseline -> y shift from the requested position to the alphabetic
+// baseline Skia draws at (Chromium's approximations for hanging/ideographic).
+float baselineShift(const SkFont& f, uint8_t baseline) {
+  SkFontMetrics m;
+  f.getMetrics(&m);  // fAscent is negative (above baseline)
+  switch ((TextBaseline)baseline) {
+    case TextBaseline::Top: return -m.fAscent;
+    case TextBaseline::Hanging: return -m.fAscent * 0.8f;
+    case TextBaseline::Middle: return (-m.fAscent - m.fDescent) / 2.0f;
+    case TextBaseline::Ideographic:
+    case TextBaseline::Bottom: return -m.fDescent;
+    case TextBaseline::Alphabetic: break;
+  }
+  return 0.0f;
+}
+
+// textAlign -> x shift (start/end are LTR aliases in v1 — documented).
+float alignShift(float advance, uint8_t align) {
+  switch ((TextAlign)align) {
+    case TextAlign::Center: return -advance / 2.0f;
+    case TextAlign::Right:
+    case TextAlign::End: return -advance;
+    case TextAlign::Start:
+    case TextAlign::Left: break;
+  }
+  return 0.0f;
+}
+
 // Builds an SkPath from recorded path commands (the hit-test entry points).
 SkPath buildPathFromCommands(const std::vector<Command>& cmds, bool evenOdd) {
   SkPathBuilder builder;
@@ -515,6 +662,36 @@ SkPath buildPathFromCommands(const std::vector<Command>& cmds, bool evenOdd) {
 }
 
 }  // namespace
+
+bool measureTextNative(const std::string& utf8, const FontSpec& fontSpec,
+                       TextMetricsNative& out) {
+  const SkFont f = skFontFor(fontSpec);
+  if (!f.getTypeface()) return false;
+  SkRect bounds = SkRect::MakeEmpty();
+  out.width = f.measureText(utf8.data(), utf8.size(), SkTextEncoding::kUTF8,
+                            &bounds);
+  out.actualAscent = -bounds.top();
+  out.actualDescent = bounds.bottom();
+  out.actualLeft = -bounds.left();
+  out.actualRight = bounds.right();
+  SkFontMetrics m;
+  f.getMetrics(&m);
+  out.fontAscent = -m.fAscent;
+  out.fontDescent = m.fDescent;
+  return true;
+}
+
+bool registerFontData(const uint8_t* bytes, size_t len,
+                      const std::string& family) {
+  auto mgr = fontMgr();
+  if (!mgr) return false;
+  sk_sp<SkTypeface> tf =
+      mgr->makeFromData(SkData::MakeWithCopy(bytes, len));
+  if (!tf) return false;
+  std::lock_guard<std::mutex> lock(customFontMutex());
+  customFonts()[lowercase(family)] = std::move(tf);
+  return true;
+}
 
 bool imageBounds(const uint8_t* bytes, size_t len, int& width, int& height) {
   registerCodecsOnce();
@@ -688,6 +865,37 @@ void renderCommands(SkCanvas* canvas, const CommandList& commands) {
         drawComposited(c, p, [&](const SkPaint& pp) {
           canvas->drawImageRect(img, src, dst, sampling, &pp,
                                 SkCanvas::kStrict_SrcRectConstraint);
+        });
+        break;
+      }
+
+      case Op::FillText:
+      case Op::StrokeText: {
+        if (c.text < 0 || (size_t)c.text >= commands.texts.size()) break;
+        if (c.font < 0 || (size_t)c.font >= commands.fonts.size()) break;
+        const std::string& str = commands.texts[(size_t)c.text];
+        const SkFont f = skFontFor(commands.fonts[(size_t)c.font]);
+        if (str.empty() || !f.getTypeface()) break;
+
+        SkPaint p;
+        p.setAntiAlias(true);
+        if (c.op == Op::StrokeText) {
+          p.setStyle(SkPaint::kStroke_Style);
+          p.setStrokeWidth(c.lineWidth);
+          p.setStrokeCap((SkPaint::Cap)c.cap);
+          p.setStrokeJoin((SkPaint::Join)c.join);
+          p.setStrokeMiter(c.miterLimit);
+        }
+        applyStyle(p, c, commands);  // solid color or gradient (gradient text!)
+        applyEffects(p, c, commands);
+
+        const float advance =
+            f.measureText(str.data(), str.size(), SkTextEncoding::kUTF8);
+        const float x = c.x + alignShift(advance, c.align);
+        const float y = c.y + baselineShift(f, c.baseline);
+        drawComposited(c, p, [&](const SkPaint& pp) {
+          canvas->drawSimpleText(str.data(), str.size(),
+                                 SkTextEncoding::kUTF8, x, y, f, pp);
         });
         break;
       }

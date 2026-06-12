@@ -19,6 +19,7 @@ import ShadowsPage from './pages/ShadowsPage';
 import CompositePage from './pages/CompositePage';
 import FilterPage from './pages/FilterPage';
 import ImagePage from './pages/ImagePage';
+import TextPage from './pages/TextPage';
 import ClipPage from './pages/ClipPage';
 import HitTestPage from './pages/HitTestPage';
 
@@ -64,6 +65,13 @@ const PAGES = [
     title: 'Composite Ops',
     subtitle: 'globalCompositeOperation — all 26 modes',
     Component: CompositePage,
+  },
+  {
+    key: 'text',
+    title: 'Text',
+    subtitle:
+      'font · fillText/strokeText · align/baseline · measureText · .ttf',
+    Component: TextPage,
   },
   {
     key: 'image',
