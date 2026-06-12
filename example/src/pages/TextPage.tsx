@@ -9,7 +9,7 @@ import {
   useCanvasRef,
   useCanvasFramer,
   useFont,
-} from 'react-native-canvas';
+} from '@end-y/react-native-canvas';
 
 // Small open-licensed .ttf fetched at runtime (same byte pattern as images).
 const LOBSTER_TTF =

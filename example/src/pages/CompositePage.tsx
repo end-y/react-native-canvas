@@ -10,7 +10,7 @@ import {
   useCanvasRef,
   useCanvasFramer,
   type GlobalCompositeOperation,
-} from 'react-native-canvas';
+} from '@end-y/react-native-canvas';
 
 const MODES: GlobalCompositeOperation[] = [
   'source-over',

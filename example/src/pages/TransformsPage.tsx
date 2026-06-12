@@ -3,7 +3,11 @@
 // planet), a pulsing scale() star, and a setTransform() sheared square that
 // proves resetTransform returns to the DPR base.
 import { StyleSheet, View } from 'react-native';
-import { Canvas, useCanvasRef, useCanvasFramer } from 'react-native-canvas';
+import {
+  Canvas,
+  useCanvasRef,
+  useCanvasFramer,
+} from '@end-y/react-native-canvas';
 
 export default function TransformsPage() {
   const ref = useCanvasRef();

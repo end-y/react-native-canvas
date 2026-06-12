@@ -1769,6 +1769,42 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@end-y/react-native-canvas@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "@end-y/react-native-canvas@workspace:."
+  dependencies:
+    "@commitlint/config-conventional": "npm:^20.5.0"
+    "@eslint/compat": "npm:^2.0.3"
+    "@eslint/eslintrc": "npm:^3.3.5"
+    "@eslint/js": "npm:^10.0.1"
+    "@jest/globals": "npm:^30.0.0"
+    "@react-native/babel-preset": "npm:0.85.0"
+    "@react-native/eslint-config": "npm:0.85.0"
+    "@react-native/jest-preset": "npm:0.85.0"
+    "@release-it/conventional-changelog": "npm:^10.0.6"
+    "@types/react": "npm:^19.2.0"
+    commitlint: "npm:^20.5.0"
+    del-cli: "npm:^7.0.0"
+    eslint: "npm:^9.39.4"
+    eslint-config-prettier: "npm:^10.1.8"
+    eslint-plugin-ft-flow: "npm:^3.0.11"
+    eslint-plugin-prettier: "npm:^5.5.5"
+    jest: "npm:^30.3.0"
+    lefthook: "npm:^2.1.4"
+    prettier: "npm:^3.8.1"
+    react: "npm:19.2.3"
+    react-native: "npm:0.85.0"
+    react-native-builder-bob: "npm:^0.41.0"
+    react-native-web: "npm:~0.21.1"
+    release-it: "npm:^19.2.4"
+    turbo: "npm:^2.8.21"
+    typescript: "npm:^6.0.2"
+  peerDependencies:
+    react: "*"
+    react-native: "*"
+  languageName: unknown
+  linkType: soft
+
 "@esbuild/aix-ppc64@npm:0.27.7":
   version: 0.27.7
   resolution: "@esbuild/aix-ppc64@npm:0.27.7"
@@ -10935,42 +10971,6 @@ __metadata:
     react-native-web: "npm:~0.21.1"
     vite: "npm:^7.1.1"
     vite-plugin-commonjs: "npm:^0.10.4"
-  languageName: unknown
-  linkType: soft
-
-"react-native-canvas@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "react-native-canvas@workspace:."
-  dependencies:
-    "@commitlint/config-conventional": "npm:^20.5.0"
-    "@eslint/compat": "npm:^2.0.3"
-    "@eslint/eslintrc": "npm:^3.3.5"
-    "@eslint/js": "npm:^10.0.1"
-    "@jest/globals": "npm:^30.0.0"
-    "@react-native/babel-preset": "npm:0.85.0"
-    "@react-native/eslint-config": "npm:0.85.0"
-    "@react-native/jest-preset": "npm:0.85.0"
-    "@release-it/conventional-changelog": "npm:^10.0.6"
-    "@types/react": "npm:^19.2.0"
-    commitlint: "npm:^20.5.0"
-    del-cli: "npm:^7.0.0"
-    eslint: "npm:^9.39.4"
-    eslint-config-prettier: "npm:^10.1.8"
-    eslint-plugin-ft-flow: "npm:^3.0.11"
-    eslint-plugin-prettier: "npm:^5.5.5"
-    jest: "npm:^30.3.0"
-    lefthook: "npm:^2.1.4"
-    prettier: "npm:^3.8.1"
-    react: "npm:19.2.3"
-    react-native: "npm:0.85.0"
-    react-native-builder-bob: "npm:^0.41.0"
-    react-native-web: "npm:~0.21.1"
-    release-it: "npm:^19.2.4"
-    turbo: "npm:^2.8.21"
-    typescript: "npm:^6.0.2"
-  peerDependencies:
-    react: "*"
-    react-native: "*"
   languageName: unknown
   linkType: soft
 

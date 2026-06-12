@@ -9,7 +9,7 @@ import {
   useCanvasFramer,
   useEntity,
   type Ctx,
-} from 'react-native-canvas';
+} from '@end-y/react-native-canvas';
 
 type Point = { x: number; y: number };
 

@@ -2,7 +2,7 @@
   "compilerOptions": {
     "rootDir": ".",
     "paths": {
-      "react-native-canvas": ["./src/index"]
+      "@end-y/react-native-canvas": ["./src/index"]
     },
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,

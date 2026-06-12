@@ -2,7 +2,11 @@
 // bezierCurveTo (beating heart) · quadraticCurveTo (wave) · arcTo (rounded
 // triangle) · ellipse (rotating) · roundRect (card) · arc (pacman).
 import { StyleSheet, View } from 'react-native';
-import { Canvas, useCanvasRef, useCanvasFramer } from 'react-native-canvas';
+import {
+  Canvas,
+  useCanvasRef,
+  useCanvasFramer,
+} from '@end-y/react-native-canvas';
 
 export default function ShapesPage() {
   const ref = useCanvasRef();

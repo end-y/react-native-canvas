@@ -3,7 +3,11 @@
 // animated bar whose gradient is re-created every frame — proving the
 // snapshot semantics (addColorStop after a draw never affects that draw).
 import { StyleSheet, View } from 'react-native';
-import { Canvas, useCanvasRef, useCanvasFramer } from 'react-native-canvas';
+import {
+  Canvas,
+  useCanvasRef,
+  useCanvasFramer,
+} from '@end-y/react-native-canvas';
 
 export default function GradientsPage() {
   const ref = useCanvasRef();

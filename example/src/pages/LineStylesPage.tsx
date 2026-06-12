@@ -3,7 +3,11 @@
 // narrows — with miterLimit 10 the spike grows, with miterLimit 2 it falls
 // back to bevel (web behavior).
 import { StyleSheet, Text, View } from 'react-native';
-import { Canvas, useCanvasRef, useCanvasFramer } from 'react-native-canvas';
+import {
+  Canvas,
+  useCanvasRef,
+  useCanvasFramer,
+} from '@end-y/react-native-canvas';
 
 const CAPS = ['butt', 'round', 'square'] as const;
 const JOINS = ['miter', 'round', 'bevel'] as const;

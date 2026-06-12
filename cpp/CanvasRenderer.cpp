@@ -25,8 +25,10 @@
 #if defined(__APPLE__)
 #include "include/ports/SkFontMgr_mac_ct.h"
 #elif defined(__ANDROID__)
-#include "include/ports/SkFontMgr_android.h"
-#include "include/ports/SkFontScanner_FreeType.h"
+// Not SkFontMgr_android: its fonts.xml parser needs expat, which our build
+// disables. The directory scanner reads family names straight from the font
+// files via FreeType and works on every API level.
+#include "include/ports/SkFontMgr_directory.h"
 #endif
 
 #include "include/core/SkBlendMode.h"
@@ -521,7 +523,7 @@ sk_sp<SkFontMgr> fontMgr() {
 #if defined(__APPLE__)
     return SkFontMgr_New_CoreText(nullptr);
 #elif defined(__ANDROID__)
-    return SkFontMgr_New_Android(nullptr, SkFontScanner_Make_FreeType());
+    return SkFontMgr_New_Custom_Directory("/system/fonts");
 #else
     return sk_sp<SkFontMgr>(nullptr);
 #endif
@@ -549,15 +551,18 @@ std::unordered_map<std::string, sk_sp<SkTypeface>>& customFonts() {
 }
 
 // CSS generic family -> platform family name (nullptr = system default).
+// Android names are the REAL family names inside /system/fonts files (the
+// directory fontmgr has no fonts.xml aliases like "serif").
 const char* genericFamily(const std::string& lower) {
 #if defined(__APPLE__)
   if (lower == "serif") return "Times New Roman";
   if (lower == "monospace") return "Courier New";
 #else
-  if (lower == "serif") return "serif";
-  if (lower == "monospace") return "monospace";
+  if (lower == "sans-serif") return "Roboto";
+  if (lower == "serif") return "Noto Serif";
+  if (lower == "monospace") return "Droid Sans Mono";
 #endif
-  return nullptr;  // sans-serif and unknown generics use the default
+  return nullptr;  // sans-serif (Apple) and unknown generics use the default
 }
 
 // Resolves a FontSpec to a typeface: custom fonts first, then the system
@@ -593,8 +598,8 @@ sk_sp<SkTypeface> typefaceFor(const FontSpec& spec) {
         break;
       }
     }
-    if (lower == "sans-serif") break;  // default — resolved below
     const char* name = genericFamily(lower);
+    if (!name && lower == "sans-serif") break;  // Apple: platform default
     if (auto mgr = fontMgr()) {
       tf = mgr->matchFamilyStyle(name ? name : fam.c_str(), style);
       if (tf) break;
@@ -603,6 +608,11 @@ sk_sp<SkTypeface> typefaceFor(const FontSpec& spec) {
   if (!tf) {
     if (auto mgr = fontMgr()) {
       tf = mgr->matchFamilyStyle(nullptr, style);  // platform default
+#if !defined(__APPLE__)
+      // Directory fontmgr has no meaningful "default" — pin it to Roboto so
+      // an unmatched family doesn't land on an arbitrary first-scanned font.
+      if (!tf) tf = mgr->matchFamilyStyle("Roboto", style);
+#endif
       if (!tf) tf = mgr->legacyMakeTypeface(nullptr, style);
     }
   }

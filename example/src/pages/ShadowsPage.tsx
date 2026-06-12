@@ -3,7 +3,11 @@
 // shrinks with height. Note shadow state PERSISTS across draws (web
 // semantics) — it must be reset when done.
 import { StyleSheet, View } from 'react-native';
-import { Canvas, useCanvasRef, useCanvasFramer } from 'react-native-canvas';
+import {
+  Canvas,
+  useCanvasRef,
+  useCanvasFramer,
+} from '@end-y/react-native-canvas';
 
 export default function ShadowsPage() {
   const ref = useCanvasRef();

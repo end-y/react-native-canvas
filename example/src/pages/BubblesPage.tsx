@@ -8,7 +8,7 @@ import {
   type Ctx,
   type Path2D,
   type InstanceData,
-} from 'react-native-canvas';
+} from '@end-y/react-native-canvas';
 
 const COLORS = ['#3478f6', '#f6493b', '#34c759', '#ffd60a', '#bf5af2'];
 const N_COLORS = COLORS.length;

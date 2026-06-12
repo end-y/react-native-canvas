@@ -1,5 +1,5 @@
 {
-  "name": "react-native-canvas",
+  "name": "@end-y/react-native-canvas",
   "version": "0.1.0",
   "description": "React Native Canvas — imperative HTML5 Canvas 2D API powered by Skia (C++)",
   "main": "./lib/module/index.js",
@@ -60,14 +60,14 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/enderyazici/react-native-canvas.git"
+    "url": "git+https://github.com/end-y/react-native-canvas.git"
   },
-  "author": "Ender Yazici <enderyazici57@gmail.com> (https://github.com/enderyazici)",
+  "author": "Ender Yazici <enderyazici57@gmail.com> (https://github.com/end-y)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/enderyazici/react-native-canvas/issues"
+    "url": "https://github.com/end-y/react-native-canvas/issues"
   },
-  "homepage": "https://github.com/enderyazici/react-native-canvas#readme",
+  "homepage": "https://github.com/end-y/react-native-canvas#readme",
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
