@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/end-y/react-native-canvas/main/docs/rn_canvas_logo.png" alt="react-native-canvas logo" width="280" />
+</p>
+
 # @end-y/react-native-canvas
 
 **The HTML5 Canvas 2D API for React Native — GPU-rendered by Skia (C++), no WebView, no bridge.**
