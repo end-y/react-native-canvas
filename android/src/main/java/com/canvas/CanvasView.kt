@@ -78,9 +78,17 @@ class CanvasView @JvmOverloads constructor(
     nativeSurfaceDestroyed(id)
   }
 
-  // --- Touch -> onPress ------------------------------------------------------
+  // --- Touch -> onPress + drag events ----------------------------------------
+  // Drag events fire alongside the tap detector: down/move/up(+cancel) become
+  // topCanvasTouchStart/Move/End; a tap additionally emits topCanvasPress.
   @Suppress("ClickableViewAccessibility")
   override fun onTouchEvent(event: MotionEvent): Boolean {
+    when (event.actionMasked) {
+      MotionEvent.ACTION_DOWN -> emitTouch(OnTouchEvent.START, event.x, event.y)
+      MotionEvent.ACTION_MOVE -> emitTouch(OnTouchEvent.MOVE, event.x, event.y)
+      MotionEvent.ACTION_UP,
+      MotionEvent.ACTION_CANCEL -> emitTouch(OnTouchEvent.END, event.x, event.y)
+    }
     gestureDetector.onTouchEvent(event)
     return true
   }
@@ -93,6 +101,21 @@ class CanvasView @JvmOverloads constructor(
       OnPressEvent(
         UIManagerHelper.getSurfaceId(this),
         id,
+        (px / density).toDouble(),
+        (py / density).toDouble()
+      )
+    )
+  }
+
+  private fun emitTouch(name: String, px: Float, py: Float) {
+    val reactContext = context as? ReactContext ?: return
+    val dispatcher = UIManagerHelper.getEventDispatcherForReactTag(reactContext, id) ?: return
+    val density = resources.displayMetrics.density
+    dispatcher.dispatchEvent(
+      OnTouchEvent(
+        UIManagerHelper.getSurfaceId(this),
+        id,
+        name,
         (px / density).toDouble(),
         (py / density).toDouble()
       )

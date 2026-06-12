@@ -73,6 +73,9 @@ using namespace facebook::react;
 
     UITapGestureRecognizer *tap =
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
+    // Don't cancel raw touches: a tap then emits touchStart + touchEnd AND
+    // onCanvasPress (like the web's pointerdown/up + click).
+    tap.cancelsTouchesInView = NO;
     [self addGestureRecognizer:tap];
   }
 
@@ -89,6 +92,64 @@ using namespace facebook::react;
   CGPoint p = [gr locationInView:self];
   auto emitter = std::static_pointer_cast<const CanvasViewEventEmitter>(_eventEmitter);
   emitter->onCanvasPress(CanvasViewEventEmitter::OnCanvasPress{.x = p.x, .y = p.y});
+}
+
+// --- Drag events: raw touches -> onCanvasTouchStart/Move/End ----------------
+// Coordinates are canvas-local logical points. A native cancel emits End
+// (the JS API folds cancel into onTouchEnd).
+
+typedef NS_ENUM(NSInteger, RNCanvasTouchPhase) {
+  RNCanvasTouchPhaseStart,
+  RNCanvasTouchPhaseMove,
+  RNCanvasTouchPhaseEnd,
+};
+
+- (void)emitTouch:(NSSet<UITouch *> *)touches phase:(RNCanvasTouchPhase)phase
+{
+  if (!_eventEmitter) {
+    return;
+  }
+  UITouch *touch = [touches anyObject];
+  CGPoint p = [touch locationInView:self];
+  auto emitter = std::static_pointer_cast<const CanvasViewEventEmitter>(_eventEmitter);
+  switch (phase) {
+    case RNCanvasTouchPhaseStart:
+      emitter->onCanvasTouchStart(
+          CanvasViewEventEmitter::OnCanvasTouchStart{.x = p.x, .y = p.y});
+      break;
+    case RNCanvasTouchPhaseMove:
+      emitter->onCanvasTouchMove(
+          CanvasViewEventEmitter::OnCanvasTouchMove{.x = p.x, .y = p.y});
+      break;
+    case RNCanvasTouchPhaseEnd:
+      emitter->onCanvasTouchEnd(
+          CanvasViewEventEmitter::OnCanvasTouchEnd{.x = p.x, .y = p.y});
+      break;
+  }
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+  [super touchesBegan:touches withEvent:event];
+  [self emitTouch:touches phase:RNCanvasTouchPhaseStart];
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+  [super touchesMoved:touches withEvent:event];
+  [self emitTouch:touches phase:RNCanvasTouchPhaseMove];
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+  [super touchesEnded:touches withEvent:event];
+  [self emitTouch:touches phase:RNCanvasTouchPhaseEnd];
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+  [super touchesCancelled:touches withEvent:event];
+  [self emitTouch:touches phase:RNCanvasTouchPhaseEnd];
 }
 
 // The Fabric mounting registry sets view.tag = reactTag on mount, and 0 on

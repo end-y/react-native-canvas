@@ -14,6 +14,18 @@ interface NativeProps extends ViewProps {
   onCanvasPress?: CodegenTypes.DirectEventHandler<
     Readonly<{ x: CodegenTypes.Double; y: CodegenTypes.Double }>
   >;
+  // Drag events (canvas-local logical px). Named onCanvasTouch* because RN's
+  // own topTouchStart/... are reserved core events; the public <Canvas>
+  // exposes them as onTouchStart/Move/End. End also fires on native cancel.
+  onCanvasTouchStart?: CodegenTypes.DirectEventHandler<
+    Readonly<{ x: CodegenTypes.Double; y: CodegenTypes.Double }>
+  >;
+  onCanvasTouchMove?: CodegenTypes.DirectEventHandler<
+    Readonly<{ x: CodegenTypes.Double; y: CodegenTypes.Double }>
+  >;
+  onCanvasTouchEnd?: CodegenTypes.DirectEventHandler<
+    Readonly<{ x: CodegenTypes.Double; y: CodegenTypes.Double }>
+  >;
 }
 
 export default codegenNativeComponent<NativeProps>('CanvasView');

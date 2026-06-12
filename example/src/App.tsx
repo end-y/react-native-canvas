@@ -22,6 +22,7 @@ import ImagePage from './pages/ImagePage';
 import TextPage from './pages/TextPage';
 import ClipPage from './pages/ClipPage';
 import HitTestPage from './pages/HitTestPage';
+import DragPage from './pages/DragPage';
 
 const PAGES = [
   {
@@ -96,6 +97,12 @@ const PAGES = [
     title: 'Hit Testing',
     subtitle: 'isPointInPath · isPointInStroke · Path2D overloads',
     Component: HitTestPage,
+  },
+  {
+    key: 'drag',
+    title: 'Drag Events',
+    subtitle: 'onTouchStart/Move/End — draggable ball + finger paint + fling',
+    Component: DragPage,
   },
 ];
 

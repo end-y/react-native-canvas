@@ -21,18 +21,28 @@ export interface CanvasHandle {
   getTag(): number | null;
 }
 
-// Canvas-local tap coordinate (logical px). Hit-testing is the user's job
+// Canvas-local touch coordinate (logical px). Hit-testing is the user's job
 // (DESIGN §3) — the canvas doesn't know what shapes are drawn in it.
 export type CanvasPressEvent = { x: number; y: number };
+export type CanvasTouchEvent = CanvasPressEvent;
 
-export type CanvasProps = ViewProps & {
+// Our onTouchStart/Move/End take canvas-local {x, y}, replacing the View
+// responder props of the same names (hence the Omit).
+export type CanvasProps = Omit<
+  ViewProps,
+  'onTouchStart' | 'onTouchMove' | 'onTouchEnd' | 'onTouchCancel'
+> & {
   // Background clear color for the Skia surface (optional).
   color?: ColorValue;
   onPress?: (e: CanvasPressEvent) => void;
+  // Drag events. End also fires when the gesture is cancelled natively.
+  onTouchStart?: (e: CanvasTouchEvent) => void;
+  onTouchMove?: (e: CanvasTouchEvent) => void;
+  onTouchEnd?: (e: CanvasTouchEvent) => void;
 };
 
 export const Canvas = forwardRef(function CanvasComponent(
-  { onPress, ...rest }: CanvasProps,
+  { onPress, onTouchStart, onTouchMove, onTouchEnd, ...rest }: CanvasProps,
   ref: Ref<CanvasHandle>
 ) {
   const nativeRef = useRef(null);
@@ -61,6 +71,21 @@ export const Canvas = forwardRef(function CanvasComponent(
       onCanvasPress={
         onPress
           ? (e) => onPress({ x: e.nativeEvent.x, y: e.nativeEvent.y })
+          : undefined
+      }
+      onCanvasTouchStart={
+        onTouchStart
+          ? (e) => onTouchStart({ x: e.nativeEvent.x, y: e.nativeEvent.y })
+          : undefined
+      }
+      onCanvasTouchMove={
+        onTouchMove
+          ? (e) => onTouchMove({ x: e.nativeEvent.x, y: e.nativeEvent.y })
+          : undefined
+      }
+      onCanvasTouchEnd={
+        onTouchEnd
+          ? (e) => onTouchEnd({ x: e.nativeEvent.x, y: e.nativeEvent.y })
           : undefined
       }
     />

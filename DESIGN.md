@@ -389,7 +389,7 @@ Skia'yı sıfırdan derlemek sancılıdır; **prebuilt binary** kullanılır.
 
 > ~~Text~~ ve ~~Image~~ **v1 yayın kapısına alındı** (§4) — v2 değil. ~~Gradient~~ ✅ ~~shadow~~ ✅ ~~globalCompositeOperation~~ ✅ ~~clip~~ ✅ ~~filter~~ ✅ ~~isPointInPath~~ ✅ tamamlandı.
 
-- **Sürükleme event'leri:** `onTouchStart` / `onTouchMove` / `onTouchEnd` (aynı koordinat altyapısı).
+- ~~Sürükleme event'leri~~ ✅ **0.1'e alındı ve tamamlandı:** `onTouchStart` / `onTouchMove` / `onTouchEnd` (`<Canvas>` prop'ları; native `onCanvasTouch*` direct event'leri — RN'in çekirdek `topTouchStart`'ı rezerve. Native cancel → `onTouchEnd`. iOS raw `touches*` override'ları + `tap.cancelsTouchesInView=NO`; Android `onTouchEvent` ACTION_DOWN/MOVE/UP/CANCEL).
 - **Pattern** (`createPattern`, v1 image altyapısının üstüne ucuz).
 - **Pixel erişimi:** `getImageData`/`putImageData` (render-thread readback senkronizasyonu + ArrayBuffer köprüsü).
 - **`toDataURL` / `toBlob`** (readback + PNG/JPEG encode + base64).

@@ -35,10 +35,13 @@ class CanvasViewManager : SimpleViewManager<CanvasView>(),
     view?.setSkColor(color ?: Color.WHITE)
   }
 
-  // Maps the native "topCanvasPress" event to the JS onCanvasPress handler.
+  // Maps the native direct events to their JS handlers.
   override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> {
     val constants = super.getExportedCustomDirectEventTypeConstants() ?: HashMap()
     constants["topCanvasPress"] = mutableMapOf("registrationName" to "onCanvasPress")
+    constants[OnTouchEvent.START] = mutableMapOf("registrationName" to "onCanvasTouchStart")
+    constants[OnTouchEvent.MOVE] = mutableMapOf("registrationName" to "onCanvasTouchMove")
+    constants[OnTouchEvent.END] = mutableMapOf("registrationName" to "onCanvasTouchEnd")
     return constants
   }
 
