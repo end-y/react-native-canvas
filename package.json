@@ -1,7 +1,7 @@
 {
   "name": "@rn-projects/react-native-canvas",
   "version": "0.1.0",
-  "description": "React Native Canvas — imperative HTML5 Canvas 2D API powered by Skia (C++)",
+  "description": "The HTML5 Canvas 2D API for React Native, GPU-rendered with Skia (C++) — paths, text, images, gradients, filters & drag events at 60fps. No WebView, no bridge. If you know ctx.fillRect, you already know it.",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
   "exports": {
