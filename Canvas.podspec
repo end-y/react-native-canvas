@@ -36,10 +36,16 @@ Pod::Spec.new do |s|
   # vendored_libraries does not reliably propagate the static lib to the app link
   # line under the RN New Arch / prebuilt setup, so link it into the *app* target
   # explicitly by full path, selected per SDK (simulator vs device).
-  # PODS_ROOT = example/ios/Pods => repo root is ../../../.
+  #
+  # Resolve from __dir__ (this podspec's own directory = the installed package
+  # dir for ANY consumer), NOT from $(PODS_ROOT). $(PODS_ROOT) is consumer-
+  # relative (<app>/ios/Pods), so the old "$(PODS_ROOT)/../../.." only pointed
+  # at the package root when the consumer was our own example app; in a real
+  # app it missed and the linker failed to find libskia.a.
+  skia_libs = File.join(__dir__, "third_party/skia/libs/apple")
   s.user_target_xcconfig = {
-    "OTHER_LDFLAGS[sdk=iphonesimulator*]" => "$(inherited) \"$(PODS_ROOT)/../../../third_party/skia/libs/apple/ios-sim-arm64/libskia.a\"",
-    "OTHER_LDFLAGS[sdk=iphoneos*]" => "$(inherited) \"$(PODS_ROOT)/../../../third_party/skia/libs/apple/ios-arm64/libskia.a\"",
+    "OTHER_LDFLAGS[sdk=iphonesimulator*]" => "$(inherited) \"#{skia_libs}/ios-sim-arm64/libskia.a\"",
+    "OTHER_LDFLAGS[sdk=iphoneos*]" => "$(inherited) \"#{skia_libs}/ios-arm64/libskia.a\"",
   }
 
   install_modules_dependencies(s)
