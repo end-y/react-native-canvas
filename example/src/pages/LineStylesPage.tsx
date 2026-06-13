@@ -7,7 +7,7 @@ import {
   Canvas,
   useCanvasRef,
   useCanvasFramer,
-} from '@end-y/react-native-canvas';
+} from '@rn-projects/react-native-canvas';
 
 const CAPS = ['butt', 'round', 'square'] as const;
 const JOINS = ['miter', 'round', 'bevel'] as const;

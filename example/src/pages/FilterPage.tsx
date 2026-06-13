@@ -8,7 +8,7 @@ import {
   useCanvasRef,
   useCanvasFramer,
   type Ctx,
-} from '@end-y/react-native-canvas';
+} from '@rn-projects/react-native-canvas';
 
 const FILTERS = [
   'none',

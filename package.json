@@ -1,5 +1,5 @@
 {
-  "name": "@end-y/react-native-canvas",
+  "name": "@rn-projects/react-native-canvas",
   "version": "0.1.0",
   "description": "React Native Canvas — imperative HTML5 Canvas 2D API powered by Skia (C++)",
   "main": "./lib/module/index.js",

@@ -8,7 +8,7 @@ import {
   useCanvasRef,
   useCanvasFramer,
   type Ctx,
-} from '@end-y/react-native-canvas';
+} from '@rn-projects/react-native-canvas';
 
 // Writes a 5-point star into the current path (works for ctx since the
 // methods are HTML5-identical).

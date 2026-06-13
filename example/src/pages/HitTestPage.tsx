@@ -10,7 +10,7 @@ import {
   useCanvasRef,
   useCanvasFramer,
   type Path2D as Path2DType,
-} from '@end-y/react-native-canvas';
+} from '@rn-projects/react-native-canvas';
 
 const RING_WIDTH = 18;
 

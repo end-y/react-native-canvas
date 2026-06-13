@@ -8,7 +8,7 @@ import {
   useCanvasRef,
   useCanvasFramer,
   useImage,
-} from '@end-y/react-native-canvas';
+} from '@rn-projects/react-native-canvas';
 
 const LOGO_URI = 'https://reactnative.dev/img/tiny_logo.png'; // 64x64 png
 

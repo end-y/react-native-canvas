@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/end-y/react-native-canvas/main/docs/rn_canvas_logo.png" alt="react-native-canvas logo" width="280" />
 </p>
 
-# @end-y/react-native-canvas
+# @rn-projects/react-native-canvas
 
 **The HTML5 Canvas 2D API for React Native — GPU-rendered by Skia (C++), no WebView, no bridge.**
 
@@ -13,7 +13,7 @@ rendering architecture as Flutter, exposed through the API the web already
 taught you.
 
 ```tsx
-import { Canvas, useCanvasRef, useCanvasFramer } from '@end-y/react-native-canvas';
+import { Canvas, useCanvasRef, useCanvasFramer } from '@rn-projects/react-native-canvas';
 
 function Ball() {
   const ref = useCanvasRef();
@@ -54,7 +54,7 @@ function Ball() {
 ## Installation
 
 ```sh
-npm install @end-y/react-native-canvas
+npm install @rn-projects/react-native-canvas
 cd ios && pod install
 ```
 

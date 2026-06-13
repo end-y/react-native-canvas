@@ -7,7 +7,7 @@ import {
   Canvas,
   useCanvasRef,
   useCanvasFramer,
-} from '@end-y/react-native-canvas';
+} from '@rn-projects/react-native-canvas';
 
 export default function GradientsPage() {
   const ref = useCanvasRef();
